@@ -1,0 +1,9 @@
+{
+  "source_executable": "VT_STUDIO_v5.0.exe",
+  "source_managed_assembly": "VT_STUDIO_v5.0.dll",
+  "managed_assembly_sha256": "3d6e9f0ab1d23cb031b5e1e25ae17967bdc7ef9b0578e56e6953c684407a37bd",
+  "resource_name": "vt-engine.exe",
+  "resource_sha256": "94a015245345ea11fe6da2f87a1be28733218d890ad2b8b1bf130006a5a6675e",
+  "extraction": "static .NET single-file bundle then managed Windows resource",
+  "geometry_verified": "top_left_origin; right/bottom crop/pad; no resampling"
+}
