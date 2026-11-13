@@ -126,7 +126,7 @@ class CameraDesktopTests(unittest.TestCase):
             p.optical_mode.setCurrentIndex(p.optical_mode.findData('fov'));p.recalculate()
             self.assertAlmostEqual(p.controls['x_mm_per_px'].value(),p.plan['metrics']['x_mm_per_px'],places=6)
             form=p.field_forms['working_distance_mm']
-            self.assertTrue(form.table.isRowHidden(form.rows[p.controls['working_distance_mm']]))
+            self.assertTrue(form.isRowHidden(p.controls['working_distance_mm']))
         finally:w.close();self.app.processEvents()
 
     def test_compare_invalidation_background_write_and_close_protection(self):

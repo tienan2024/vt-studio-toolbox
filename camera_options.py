@@ -55,7 +55,7 @@ LABELS={
 }
 
 FIELD_LABELS={
-    'framing_source':'Framing','horizontal_margin_percent':'Horizontal margin',
+    'framing_source':'Framing','horizontal_margin_percent':'Horizontal margin','vertical_margin_percent':'Vertical margin',
     'cycle_idle_lines':'Min. cycle idle','height_rounding':'Height rounding',
     'cycle_travel_mm':'Measured Z-cycle travel','frequency_strategy':'Frequency strategy',
     'target_width_mm':'Product width','target_length_mm':'Product length',

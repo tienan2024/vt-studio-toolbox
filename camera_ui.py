@@ -7,7 +7,7 @@ from PySide6.QtGui import QPainter,QColor,QPen
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,
     QPushButton,QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QCheckBox,QTabWidget,
     QSplitter,QScrollArea,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,
-    QPlainTextEdit,QFileDialog,QProgressBar,QMenu)
+    QPlainTextEdit,QFileDialog,QProgressBar,QMenu,QGridLayout,QSizePolicy)
 from styled_controls import make_combo
 from camera_model import CameraSettings,CameraError,calculate,config_dict,settings_from_dict,import_mfs_text,fingerprint,workflow_settings
 from camera_sdk import discover_mvs,enumerate_cameras
@@ -78,15 +78,91 @@ class PropertyForm:
     def setRowVisible(self,widget,visible):
         self.table.setRowHidden(self.rows[widget],not visible);self.fit()
 
+    def isRowHidden(self,widget):
+        return self.table.isRowHidden(self.rows[widget])
+
     def fit(self):
         self.table.setFixedHeight(max(30,self.table.horizontalHeader().sizeHint().height())+sum(self.table.rowHeight(i) for i in range(self.table.rowCount()) if not self.table.isRowHidden(i))+4)
+
+
+class ConditionForm:
+    """Working-condition editors; reuse the existing typed controls and signals."""
+    def __init__(self,page,title):
+        self.page=page;self.entries=[];self.rows={};self.order=[]
+        self.widget=QWidget();self.grid=QGridLayout(self.widget)
+        self.grid.setContentsMargins(12,14,12,14)
+        self.grid.setHorizontalSpacing(14);self.grid.setVerticalSpacing(14)
+        self.grid.setColumnStretch(0,1);self.grid.setColumnStretch(1,1)
+        self.grid.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.scroll=QScrollArea();self.scroll.setWidgetResizable(True);self.scroll.setWidget(self.widget)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        page.form_tabs.addTab(self.scroll,title);page.input_forms.append(self)
+
+    def addRow(self,caption,widget=None):
+        cell=QWidget();layout=QVBoxLayout(cell);layout.setContentsMargins(0,0,0,0);layout.setSpacing(6)
+        if widget is None:
+            widget=caption;caption=None
+        if caption is not None:
+            caption.setWordWrap(True)
+            layout.addWidget(caption)
+            caption.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Preferred)
+        widget.setMinimumWidth(0)
+        widget.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Fixed)
+        if isinstance(widget,QComboBox):
+            widget.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            widget.setMinimumContentsLength(8)
+        layout.addWidget(widget)
+        span=2 if caption is None else 1
+        self.entries.append((widget,cell,span));self.rows[widget]=True
+        self.fit()
+
+    def arrange(self,widgets,wide=()):
+        self.order=list(widgets)
+        self.entries=[(widget,cell,2 if widget in wide else span) for widget,cell,span in self.entries]
+        self.fit()
+
+    def setRowVisible(self,widget,visible):
+        if self.rows[widget]!=visible:
+            self.rows[widget]=visible;self.fit()
+        widget.setVisible(visible)
+
+    def isRowHidden(self,widget):
+        return not self.rows[widget]
+
+    def content_height(self):
+        margins=self.grid.contentsMargins()
+        width=self.scroll.contentsRect().width()-self.scroll.verticalScrollBar().sizeHint().width()-margins.left()-margins.right()
+        column_width=max(1,(width-self.grid.horizontalSpacing())//2)
+        heights={}
+        for index in range(self.grid.count()):
+            item=self.grid.itemAt(index);row,_,_,span=self.grid.getItemPosition(index)
+            cell=item.widget();layout=cell.layout()
+            height=layout.heightForWidth(column_width*span+self.grid.horizontalSpacing()*(span-1))
+            if height<0:height=layout.sizeHint().height()
+            cell.setMinimumHeight(height)
+            heights[row]=max(heights.get(row,0),height)
+        return sum(heights.values())+max(0,len(heights)-1)*self.grid.verticalSpacing()+margins.top()+margins.bottom()
+
+    def fit(self):
+        while self.grid.count():self.grid.takeAt(0)
+        entries=sorted(self.entries,key=lambda entry:self.order.index(entry[0]) if entry[0] in self.order else len(self.order))
+        row=column=0
+        for widget,cell,span in entries:
+            visible=self.rows[widget];cell.setVisible(visible)
+            if not visible:continue
+            if span==2 and column:row+=1;column=0
+            self.grid.addWidget(cell,row,column,1,span)
+            column+=span
+            if column>=2:row+=1;column=0
+        self.grid.invalidate()
+        if hasattr(self.page,'advanced_button'):self.page.schedule_input_fit()
 
 
 class CameraPage(QWidget):
     def __init__(self):
         super().__init__();self.setObjectName('CameraPage')
         self.worker=None;self.preview=None;self.last_report=None;self.geometry=None;self.plan=None;self._loading=False
-        self.controls={};self.labels={};self.field_forms={};self.field_titles={};self.property_forms=[];self.language='zh';self.output_caps={}
+        self.controls={};self.labels={};self.field_forms={};self.field_titles={};self.property_forms=[];self.input_forms=[];self._input_fit_pending=False;self.language='zh';self.output_caps={}
         self.sdk=discover_mvs();root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(10)
         tools=QHBoxLayout();tools.addStretch()
         self.language_box=self.styled_combo();self.language_box.addItem('中文','zh');self.language_box.addItem('English','en')
@@ -106,9 +182,9 @@ class CameraPage(QWidget):
         for key,preset in PRESETS.items():self.camera_type.addItem(preset['zh'],key)
         self.camera_type.addItem('自定义 / 已连接设备','custom')
         left.addWidget(self.camera_type);self.camera_info=QLabel();self.camera_info.setObjectName('Subtle');self.camera_info.setWordWrap(True);left.addWidget(self.camera_info)
-        self.form_tabs=QTabWidget();left.addWidget(self.form_tabs,1)
-        station=PropertyForm(self,'材料与视野');self.parameter_table=station.table
-        encoder=PropertyForm(self,'编码器与图高');trigger=self.form_tab('采集触发')
+        self.form_tabs=QTabWidget();left.addWidget(self.form_tabs)
+        station=ConditionForm(self,'材料与视野');self.parameter_form=station
+        encoder=ConditionForm(self,'编码器与图高');trigger=self.form_tab('采集触发')
         io=PropertyForm(self,'数字 IO');self.io_table=io.table
         calibration=self.form_tab('专业标定');image=self.form_tab('成像')
         self.basic_tab_count=3
@@ -117,6 +193,12 @@ class CameraPage(QWidget):
         self.number(station,'target_length_mm','材料长度 / mm',.001,100000,3)
         self.combo(station,'framing_source','计算方向',[('材料宽度 → 工作距离','material'),('工作距离 → 视野','distance'),('原有计算配置','legacy')])
         self.number(station,'horizontal_margin_percent','横向总余量 / %',0,1000,2)
+        self.number(station,'vertical_margin_percent','纵向总余量 / %',-1,1000,2,special='沿用原毫米留白')
+        self.target_fov_fields={};self.target_fov_labels={}
+        for key,title in (('target_fov_width_mm','视野宽度（目标宽度） / mm'),('target_fov_height_mm','视野长度（目标长度） / mm')):
+            field=QLineEdit();field.setReadOnly(True);field.setStyleSheet('background:#edf0f5; color:#526377;')
+            caption=QLabel(title);station.addRow(caption,field)
+            self.target_fov_fields[key]=field;self.target_fov_labels[key]=caption
         self.optical_mode=self.styled_combo()
         for value in ('wd_to_precision','precision_to_wd','fov'):self.optical_mode.addItem(option_label(value),value)
         self.optical_mode_label=QLabel('原计算方向');calibration.addRow(self.optical_mode_label,self.optical_mode)
@@ -193,6 +275,11 @@ class CameraPage(QWidget):
         self.check(image,'limit_line_rate','启用手动行频')
         self.check(image,'require_square','要求方形像素');self.number(image,'square_tolerance_percent','X/Y 允许差异 / %',0,100,2)
         self.advanced_button=self.button('更多参数',lambda:None,left);self.advanced_button.setCheckable(True);self.advanced_button.toggled.connect(self.toggle_advanced)
+        station.arrange([self.controls[key] for key in ('framing_source','optics_method','target_width_mm','target_length_mm',
+            'horizontal_margin_percent','vertical_margin_percent')]+list(self.target_fov_fields.values())+
+            [self.controls[key] for key in ('working_distance_mm','focal_length_mm','pixel_pitch_um','principal_plane_offset_mm')])
+        left.addStretch(1)
+        self.form_tabs.currentChanged.connect(self.schedule_input_fit)
         self.toggle_advanced(False)
         self.camera_type.currentIndexChanged.connect(self.preset_changed)
         self.optical_mode.currentIndexChanged.connect(self.optical_mode_changed)
@@ -344,6 +431,9 @@ class CameraPage(QWidget):
         for i,name in enumerate(names):self.form_tabs.setTabText(i,name)
         self.optical_mode_label.setText('Calculate' if en else '计算方向')
         for form in self.property_forms:form.table.setHorizontalHeaderLabels(['Parameter','Value','Unit'] if en else ['参数','设置值','单位'])
+        for key,caption in self.target_fov_labels.items():
+            caption.setText(('Target FOV width / mm' if key=='target_fov_width_mm' else 'Target FOV length / mm') if en else
+                            ('视野宽度（目标宽度） / mm' if key=='target_fov_width_mm' else '视野长度（目标长度） / mm'))
         self.sync_preset();self.refresh_output_choices()
 
     def refresh_output_choices(self):
@@ -439,10 +529,12 @@ class CameraPage(QWidget):
         self.controls['working_distance_mm'].setEnabled(framing=='distance' if workflow else optics and not inverse)
         self.controls['horizontal_margin_percent'].setEnabled(framing=='material')
         self.field_forms['horizontal_margin_percent'].setRowVisible(self.controls['horizontal_margin_percent'],workflow)
+        self.field_forms['vertical_margin_percent'].setRowVisible(self.controls['vertical_margin_percent'],workflow)
+        for field in self.target_fov_fields.values():self.parameter_form.setRowVisible(field,workflow)
         for key in ('image_horizontal_margin_mm','image_vertical_margin_mm'):
             self.field_forms[key].setRowVisible(self.controls[key],not workflow)
         if workflow:
-            self.field_forms['working_distance_mm'].setRowVisible(self.controls['working_distance_mm'],True)
+            self.field_forms['working_distance_mm'].setRowVisible(self.controls['working_distance_mm'],framing=='distance')
             self.field_forms['focal_length_mm'].setRowVisible(self.controls['focal_length_mm'],not known)
             self.controls['x_mm_per_px'].setEnabled(False)
         self.field_forms['encoder_travel_mm_per_rev'].setRowVisible(self.controls['encoder_travel_mm_per_rev'],line and not cycle)
@@ -479,10 +571,27 @@ class CameraPage(QWidget):
             self.frame_preview.setVisible(not self.details_button.isChecked() and self.height()>=680)
             QTimer.singleShot(0,self.fit_metrics)
 
+    def schedule_input_fit(self,*_):
+        if not self._input_fit_pending:
+            self._input_fit_pending=True;QTimer.singleShot(0,self.fit_input_panel)
+
+    def fit_input_panel(self):
+        self._input_fit_pending=False
+        content=self.form_tabs.currentWidget().widget()
+        if content is None:return
+        content.layout().activate()
+        form=next((form for form in self.input_forms if form.widget is content),None)
+        content_height=form.content_height() if form is not None else content.layout().sizeHint().height()
+        if form is not None:content.setMinimumHeight(content_height)
+        desired=content_height+self.form_tabs.tabBar().sizeHint().height()+16
+        available=self.form_panel.height()-self.camera_type.height()-self.camera_info.sizeHint().height()-self.advanced_button.sizeHint().height()-38
+        self.form_tabs.setFixedHeight(min(max(180,desired),max(180,available)))
+
     def fit_metrics(self):
         header=self.metrics.horizontalHeader();header.ensurePolished()
         self.metrics.setFixedHeight(max(header.height(),header.sizeHint().height())+sum(self.metrics.rowHeight(i) for i in range(self.metrics.rowCount()))+2*self.metrics.frameWidth()+4)
         for form in self.property_forms:form.fit()
+        self.schedule_input_fit()
 
     @staticmethod
     def fill(table,rows):
@@ -532,7 +641,7 @@ class CameraPage(QWidget):
         self.fill(self.metrics,rows);self.fit_metrics();self.frame_preview.plan=plan;self.frame_preview.update()
         self.fill(self.node_table,[[', '.join(n['selectors'].values()) or '全局',n['key'],n['value']] for n in plan['nodes']])
         self.optics_summary.show()
-        text='图内背景 '+str(m['background_height_lines'])+' 行'
+        text='实际覆盖 '+format(m['coverage_width_mm'],'.3f')+' × '+format(m['coverage_height_mm'],'.3f')+' mm · 图内背景 '+str(m['background_height_lines'])+' 行'
         if line:text+=' · 有效A计数 '+format(m['effective_counts_per_product'],'.6g')+' / 周期 · 预计行频 '+format(m['required_line_rate_hz'],'.0f')+' Hz'
         self.optics_summary.setText(text)
         if plan['blocking']:message='；'.join(plan['blocking'])
@@ -567,11 +676,13 @@ class CameraPage(QWidget):
                 plan=calculate(self.settings(),limits)
             if plan['metrics']['frequency_solution']:
                 self.sync_frequency(plan);plan=calculate(self.settings(),limits)
+            for key,field in self.target_fov_fields.items():field.setText(format(plan['metrics'][key],'.3f'))
             self.render_plan(plan);self.update_actions()
             self.notify('；'.join(self.plan['blocking']) if self.plan['blocking'] else '',bool(self.plan['blocking']))
             return self.plan
         except Exception as exc:
             self.plan=None;self.metrics.setRowCount(0);self.frame_preview.plan=None;self.frame_preview.update();self.summary.clear();self.optics_summary.clear()
+            for field in self.target_fov_fields.values():field.clear()
             self.notify(str(exc),True);self.update_actions();return None
 
     def selected_uid(self):return self.device.currentData()
