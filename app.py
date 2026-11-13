@@ -10,7 +10,7 @@ import sys
 import uuid
 
 from PIL import Image
-from PySide6.QtCore import Qt, QPointF, QRectF, QThread, Signal, QUrl, QTimer
+from PySide6.QtCore import Qt, QPointF, QRectF, QSize, QThread, Signal, QUrl, QTimer
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QFont, QImage,
                            QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QIcon)
 from shiboken6 import isValid
@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBo
     QFileDialog, QFormLayout, QFrame, QGraphicsPathItem, QGraphicsScene,
     QGraphicsView, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
-    QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget, QAbstractSpinBox, QMenu)
+    QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget, QAbstractSpinBox, QMenu, QLayout)
 
 from engine import (Asset, Settings, SynthesisError, VERSION, MAX_TOTAL_SAMPLES, MAX_ROI_REGIONS, extract_asset,
                     generate_batch, load_image, load_recipe, save_recipe, synthesize)
@@ -270,7 +270,8 @@ class Canvas(QGraphicsView):
                 if (here-self.pan_origin).manhattanLength() < QApplication.startDragDistance():
                     return
                 self.pan_dragged = True
-                self.auto_fit = False
+                if self.horizontalScrollBar().maximum()>0 or self.verticalScrollBar().maximum()>0:
+                    self.auto_fit = False
                 self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
             delta = here-self.pan
             self.horizontalScrollBar().setValue(self.horizontalScrollBar().value()-delta.x())
@@ -279,7 +280,7 @@ class Canvas(QGraphicsView):
             bar.setValue(before-delta.y())
             remaining = delta.y()+bar.value()-before
             parent = self.parentWidget()
-            while parent is not None and not isinstance(parent, CanvasArea):
+            while parent is not None and not isinstance(parent, QScrollArea):
                 parent = parent.parentWidget()
             if parent is not None and remaining:
                 outer_bar = parent.verticalScrollBar()
@@ -383,16 +384,24 @@ class Canvas(QGraphicsView):
             self.overlay.setZValue(1)
 
 
-class CanvasArea(QScrollArea):
-    """Let tall source images use a taller canvas without stretching the window."""
+class CanvasTab(QWidget):
+    """Inactive image pages must not force the active page to their own height."""
+    def minimumSizeHint(self):
+        return QSize(0,0)
+
+
+class CanvasArea(QWidget):
+    """One complete width-fitted image, in the workspace's normal document flow."""
+    height_changed = Signal()
+
     def __init__(self, canvas):
         super().__init__()
         self.canvas = canvas
         self.pending = False
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setWidgetResizable(True)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setWidget(canvas)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed)
+        layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0)
+        layout.addWidget(canvas)
+        canvas.setMinimumSize(0,0)
         canvas.image_changed.connect(self.schedule_height)
 
     def resizeEvent(self, event):
@@ -411,12 +420,11 @@ class CanvasArea(QScrollArea):
     def update_height(self):
         self.pending = False
         image = self.canvas.image
-        # Reserve scrollbar width consistently. Using viewport width here can
-        # alternate heights when a nearly fitting image shows/hides the bar.
-        width = self.contentsRect().width()-self.verticalScrollBar().sizeHint().width()-8
-        height = 180 if image is None else max(240, min(3200,
-            math.ceil(max(1, width) * image.height / image.width) + 8))
-        self.canvas.setMinimumHeight(height)
+        height = 180 if image is None else max(180,min(16777215,
+            math.ceil(max(1,self.width()-8)*image.height/image.width)+8))
+        if self.minimumHeight()!=height or self.maximumHeight()!=height:
+            self.setFixedHeight(height)
+            self.height_changed.emit()
 
 
 class Worker(QThread):
@@ -444,6 +452,8 @@ class MainWindow(QMainWindow):
         self.embedded = embedded
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._busy_focus = None
+        self._canvas_layout_pending = False
+        self._preview_scroll_top = False
         if embedded:
             self.setWindowFlags(Qt.WindowType.Widget)
         self.setWindowTitle("VT 缺陷合成工具")
@@ -652,11 +662,18 @@ class MainWindow(QMainWindow):
         left.addStretch()
 
         right_widget = QWidget()
+        self.workspace_area=QScrollArea()
+        self.workspace_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.workspace_area.setWidgetResizable(True)
+        self.workspace_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.workspace_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.workspace_area.setWidget(right_widget)
         right = QVBoxLayout(right_widget)
         right.setContentsMargins(8, 0, 0, 0)
         right.setSpacing(10)
         self.tabs = QTabWidget()
-        right.addWidget(self.tabs, 1)
+        self.tabs.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed)
+        right.addWidget(self.tabs)
         self.ok_canvas = Canvas("导入 OK 底图，在此设置缺陷允许出现的区域。")
         self.ng_canvas = Canvas("打开 NG 图，在此圈选要迁移的真实缺陷。")
         self.preview_canvas = Canvas("完成底图与缺陷圈选后，点击「生成预览」。")
@@ -677,6 +694,7 @@ class MainWindow(QMainWindow):
         self._canvas_tab("合成预览", self.preview_canvas, "view",
                          "滚轮缩放，右键按住拖动平移。橙色覆盖层表示实际发生像素变化的区域。")
         self.tabs.currentChanged.connect(lambda _: self._update_message_for_tab())
+        self.tabs.currentChanged.connect(self.canvas_page_changed)
 
         preview_row = QHBoxLayout()
         self.preview_btn = self.button("生成预览", self.preview)
@@ -750,7 +768,8 @@ class MainWindow(QMainWindow):
         self.message.setObjectName("Message")
         self.message.setWordWrap(True)
         right.addWidget(self.message)
-        splitter.addWidget(right_widget)
+        right.addStretch(1)
+        splitter.addWidget(self.workspace_area)
         splitter.setSizes([350, 960])
         splitter.setStretchFactor(1, 1)
         self.statusBar().showMessage(f"v{VERSION}  |  灰度 / RGB  |  VT 缺陷多边形 XML、PNG 掩膜与 JSON")
@@ -769,8 +788,9 @@ class MainWindow(QMainWindow):
             self.addAction(action)
 
     def _canvas_tab(self, name, canvas, modes, hint):
-        tab = QWidget()
+        tab = CanvasTab()
         layout = QVBoxLayout(tab)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         layout.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
         row.setContentsMargins(10, 8, 10, 4)
@@ -802,7 +822,10 @@ class MainWindow(QMainWindow):
         fit.setToolTip('适应窗口显示完整图像')
         row.addWidget(fit)
         layout.addLayout(row)
-        layout.addWidget(CanvasArea(canvas), 1)
+        area=CanvasArea(canvas)
+        area.height_changed.connect(self.schedule_canvas_layout)
+        canvas.image_changed.connect(lambda c=canvas:self.canvas_image_changed(c))
+        layout.addWidget(area)
         label = QLabel(hint)
         label.setWordWrap(True)
         label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
@@ -810,6 +833,29 @@ class MainWindow(QMainWindow):
         label.setContentsMargins(10, 5, 10, 8)
         layout.addWidget(label)
         self.tabs.addTab(tab, name)
+        self.schedule_canvas_layout()
+
+    def canvas_page_changed(self,*_):
+        self.schedule_canvas_layout()
+        QTimer.singleShot(0,lambda:self.workspace_area.verticalScrollBar().setValue(0))
+
+    def canvas_image_changed(self,canvas):
+        page=self.tabs.currentWidget()
+        if page is not None and page.isAncestorOf(canvas):self.canvas_page_changed()
+
+    def schedule_canvas_layout(self):
+        if not self._canvas_layout_pending:
+            self._canvas_layout_pending=True
+            QTimer.singleShot(0,self.fit_canvas_page)
+
+    def fit_canvas_page(self):
+        self._canvas_layout_pending=False
+        page=self.tabs.currentWidget()
+        if page is None:return
+        layout=page.layout();layout.activate()
+        height=layout.totalHeightForWidth(max(1,page.width()))
+        if height<0:height=layout.sizeHint().height()
+        self.tabs.setFixedHeight(height+self.tabs.tabBar().sizeHint().height()+8)
 
     @staticmethod
     def button(text, slot, primary=False):
@@ -1375,6 +1421,9 @@ class MainWindow(QMainWindow):
         worker = self.worker
         self.worker = None
         self._busy(False)
+        if self._preview_scroll_top:
+            self._preview_scroll_top=False
+            QTimer.singleShot(0,lambda:self.workspace_area.verticalScrollBar().setValue(0))
         self.open_output_btn.setEnabled(self.last_run is not None)
         if worker:
             worker.deleteLater()
@@ -1413,6 +1462,7 @@ class MainWindow(QMainWindow):
         self.refresh_spatial_guides()
         self.refresh_overlay()
         self.tabs.setCurrentIndex(2)
+        self._preview_scroll_top=True
         self.preview_info.setText(f"{image.width} × {image.height} · 种子 {record['seed']}")
         donor=record.get('pool_entry_name','当前素材')
         self.preview_info.setToolTip(f"NG来源：{donor}")
