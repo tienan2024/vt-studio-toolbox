@@ -20,6 +20,12 @@ class CameraSettings:
     auto_frequency:bool=False
     encoder_travel_mm_per_rev:float=0
     frequency_tolerance_percent:float=1
+    framing_source:str='legacy'
+    horizontal_margin_percent:float=10
+    frequency_strategy:str='pitch'
+    height_rounding:int=100
+    cycle_idle_lines:int=100
+    cycle_travel_mm:float=0
     working_distance_mm:float=400
     sensor_width:int=4096
     sensor_height:int=2048
@@ -100,13 +106,19 @@ class CameraSettings:
         if self.edge_factor not in (1,2,4):raise CameraError('计数倍率应为1、2或4，以相机实际计数为准。')
         if self.optics_direction not in ('wd_to_precision','precision_to_wd'):raise CameraError('工作距离与精度的计算方向无效。')
         if self.optics_method not in ('quick','thin_lens'):raise CameraError('光学计算模式无效。')
-        if self.kind=='line' and self.auto_frequency and self.encoder_travel_mm_per_rev<=0:raise CameraError('自动倍分频需要填写编码器每圈对应的实际走料长度。')
+        if self.framing_source not in ('legacy','material','distance') or self.frequency_strategy not in ('pitch','cycle'):raise CameraError('视野或倍分频计算方式无效。')
+        if not 0<=self.horizontal_margin_percent<=1000 or self.height_rounding<1 or self.cycle_idle_lines<0 or self.cycle_travel_mm<0:raise CameraError('余量、图高步长或周期参数无效。')
+        if self.kind=='line' and self.frequency_strategy=='cycle' and self.cycle_idle_lines<1:raise CameraError('周期方案必须预留至少1行的采集空档。')
+        if self.framing_source!='legacy' and (self.pixel_pitch_um<=0 or self.focal_length_mm<=0):raise CameraError('视野计算需要有效的像元尺寸和焦距。')
+        if self.kind=='line' and self.auto_frequency and self.frequency_strategy=='pitch' and self.encoder_travel_mm_per_rev<=0:raise CameraError('按走料精度计算倍分频需要填写编码器每圈对应的实际走料长度。')
         if not 0<=self.frequency_tolerance_percent<=100:raise CameraError('采样误差容差应在0～100%。')
-        optical_wd=self.x_mm_per_px*self.focal_length_mm/(self.pixel_pitch_um/1000) if self.pixel_pitch_um>0 and self.optics_direction=='precision_to_wd' else self.working_distance_mm
+        inverse=self.framing_source=='material' or (self.framing_source=='legacy' and self.optics_direction=='precision_to_wd')
+        optical_wd=self.x_mm_per_px*self.focal_length_mm/(self.pixel_pitch_um/1000) if self.pixel_pitch_um>0 and inverse else self.working_distance_mm
+        if self.framing_source=='material':optical_wd=self.target_width_mm*(1+self.horizontal_margin_percent/100)/self.sensor_width*self.focal_length_mm/(self.pixel_pitch_um/1000)
         if self.optics_method=='thin_lens':
-            optical_wd=optical_wd+self.focal_length_mm if self.optics_direction=='precision_to_wd' else optical_wd+self.principal_plane_offset_mm
-            if self.precision_source=='optics' and self.optics_direction=='precision_to_wd' and optical_wd-self.principal_plane_offset_mm<=0:raise CameraError('反算工作距离必须大于0，请核对主平面偏移。')
-        if self.precision_source=='optics' and (self.focal_length_mm<=0 or self.pixel_pitch_um<=0 or optical_wd<=self.focal_length_mm):
+            optical_wd=optical_wd+self.focal_length_mm if inverse else optical_wd+self.principal_plane_offset_mm
+            if (self.precision_source=='optics' or self.framing_source!='legacy') and inverse and optical_wd-self.principal_plane_offset_mm<=0:raise CameraError('反算工作距离必须大于0，请核对主平面偏移。')
+        if (self.precision_source=='optics' or self.framing_source!='legacy') and (self.focal_length_mm<=0 or self.pixel_pitch_um<=0 or optical_wd<=self.focal_length_mm):
             raise CameraError('镜头估算需填写焦距、像元尺寸，且工作距离应大于焦距；实际精度请用实测视野校准。')
         if not 0<=self.rate_margin_percent<=100 or not 0<=self.square_tolerance_percent<=100:raise CameraError('余量/精度容差应在0～100%。')
         for name in ('width_override','height_override','offset_x','offset_y','a_debounce_ns','z_debounce_ns','strobe_duration_us','line_rate_override','gain','image_horizontal_margin_mm','image_vertical_margin_mm','focal_length_mm','pixel_pitch_um'):
@@ -124,12 +136,21 @@ class CameraSettings:
 def config_dict(settings):return {'schema':SCHEMA,**asdict(settings)}
 
 
+def workflow_settings():
+    """Operator example; physical motion calibration is deliberately unspecified."""
+    return CameraSettings(camera_model_id='MV-CL024-91GC',sensor_width=2048,sensor_height=3,
+        focal_length_mm=12,pixel_pitch_um=7,precision_source='optics',
+        framing_source='material',horizontal_margin_percent=10,target_width_mm=200,target_length_mm=400,
+        frequency_strategy='cycle',auto_frequency=True,line_y_source='square',height_rounding=100,
+        cycle_idle_lines=100,ppr=1000,edge_factor=1,encoder_revs=1,pixel_format='',products_per_minute=300)
+
+
 def settings_from_dict(value):
     if not isinstance(value,dict) or value.get('schema') not in (SCHEMA,'vt-camera-config/1'):raise CameraError('相机配置格式应为'+SCHEMA)
     allowed={f.name for f in fields(CameraSettings)}
     if value['schema']=='vt-camera-config/1':
         legacy={'product_pitch_mm','image_top_margin_mm','image_bottom_margin_mm','allow_overheight'}
-        added={'line_y_source','calibration_length_mm','calibration_rows','image_horizontal_margin_mm','image_vertical_margin_mm','optics_direction','camera_model_id','optics_method','principal_plane_offset_mm','auto_frequency','encoder_travel_mm_per_rev','frequency_tolerance_percent'}
+        added={'line_y_source','calibration_length_mm','calibration_rows','image_horizontal_margin_mm','image_vertical_margin_mm','optics_direction','camera_model_id','optics_method','principal_plane_offset_mm','auto_frequency','encoder_travel_mm_per_rev','frequency_tolerance_percent','framing_source','horizontal_margin_percent','frequency_strategy','height_rounding','cycle_idle_lines','cycle_travel_mm'}
         if set(value)-(allowed-added)-legacy-{'schema'}:raise CameraError('旧相机配置含未知字段。')
         def old_number(key,default,positive=False):
             number=value.get(key,default)
@@ -166,6 +187,11 @@ def calculate(settings,limits=None):
             if s.optics_direction=='wd_to_precision':dx=s.pixel_pitch_um/1000*(s.working_distance_mm+s.principal_plane_offset_mm-s.focal_length_mm)/s.focal_length_mm
             warnings.append('薄透镜近轴模型，物距从前主平面计；主平面未知、畸变及对焦变化须用实测视野校准，不是测量精度保证。')
         else:warnings.append('镜头参数为远距近似估算，请用实测视野校准；线扫Y精度仍由编码器决定。' if s.kind=='line' else '镜头参数按方形像元作远距近似估算，请用实测视野校准。')
+    if s.framing_source=='material':dx=s.target_width_mm*(1+s.horizontal_margin_percent/100)/s.sensor_width
+    elif s.framing_source=='distance':
+        object_distance=s.working_distance_mm+(s.principal_plane_offset_mm-s.focal_length_mm if s.optics_method=='thin_lens' else 0)
+        if object_distance<=0:raise CameraError('工作距离及主平面偏移不能形成有效视野。')
+        dx=s.pixel_pitch_um/1000*object_distance/s.focal_length_mm
     fov_x=dx*s.sensor_width
     lines=s.ppr*s.edge_factor*s.encoder_revs*s.multiplier/(s.pre_divider*s.post_divider) if s.kind=='line' else None
     dy=s.y_mm_per_px if lines is not None else (s.fov_height_mm/s.sensor_height if s.precision_source=='fov' else s.y_mm_per_px)
@@ -174,8 +200,10 @@ def calculate(settings,limits=None):
         elif s.line_y_source=='square':
             dy=dx;warnings.append('Y精度按方形像素规划，尚未证明编码器实际采样一致；请用原始产品图标定核对。')
         elif s.line_y_source=='legacy':blocking.append('旧配置已迁移：Y精度来自旧产品节距换算，请在工位标定中选择并确认新的Y精度来源后再写入。')
+    cycle=s.kind=='line' and s.frequency_strategy=='cycle'
+    if cycle:dy=dx
     frequency_solution=None;target_dy=dy
-    if s.kind=='line' and s.auto_frequency:
+    if s.kind=='line' and s.auto_frequency and not cycle:
         from camera_frequency import solve_frequency
         frequency_solution=solve_frequency(s.encoder_travel_mm_per_rev/(s.ppr*s.edge_factor*dy),limits)
         s=replace(s,**{key:frequency_solution[key] for key in ('pre_divider','multiplier','post_divider')})
@@ -183,17 +211,32 @@ def calculate(settings,limits=None):
         lines=s.ppr*s.edge_factor*s.encoder_revs*frequency_solution['ratio']
         if abs(100*(dy/target_dy-1))>s.frequency_tolerance_percent+1e-9:blocking.append('设备整数倍分频无法满足目标Y采样容差，请调整工位或目标精度。')
         if not frequency_solution['limits_verified']:warnings.append('倍分频使用离线规划范围1～256，连接相机后须按真实范围重算；不是设备支持保证。')
-    if s.kind=='area' and s.precision_source=='optics':dy=dx
+    if s.kind=='area' and (s.precision_source=='optics' or s.framing_source!='legacy'):dy=dx
     product_h=math.ceil(s.target_length_mm/dy-1e-10)
     margin_h=math.ceil(s.image_vertical_margin_mm/dy-1e-10)
-    needed_w=math.ceil((s.target_width_mm+s.image_horizontal_margin_mm)/dx-1e-10);needed_h=product_h+margin_h
+    needed_w=s.sensor_width if s.framing_source!='legacy' else math.ceil((s.target_width_mm+s.image_horizontal_margin_mm)/dx-1e-10);needed_h=product_h+margin_h
     width=s.width_override or needed_w;height=s.height_override or needed_h
+    if cycle and not s.height_override:height=math.ceil(needed_h/s.height_rounding)*s.height_rounding
     limits=limits or {}
     def align(value,key,up=True):
         cap=limits.get(key,{});minimum=cap.get('min',0);step=max(1,cap.get('inc',1))
         return int(minimum+(math.ceil if up else math.floor)((value-minimum)/step)*step)
     if not s.width_override:width=align(width,'Width')
     if not s.height_override:height=align(height,'Height')
+    if cycle and s.auto_frequency:
+        from camera_frequency import solve_cycle_capacity
+        frequency_solution=solve_cycle_capacity(height+s.cycle_idle_lines,s.ppr*s.edge_factor*s.encoder_revs,limits)
+        s=replace(s,**{key:frequency_solution[key] for key in ('pre_divider','multiplier','post_divider')})
+        lines=s.ppr*s.edge_factor*s.encoder_revs*frequency_solution['ratio']
+        if not frequency_solution['limits_verified']:warnings.append('整数倍频为离线建议，连接后按设备范围核对。')
+    if cycle:
+        if math.floor(lines+1e-8)-height<s.cycle_idle_lines:blocking.append('本周期行触发数不足以容纳图高和预留空档，请增加倍频或调整图高。')
+        warnings.append('Y精度为方形像素规划值；周期行数够用不等于实际无拉伸，请用原始产品图或周期走料标定。')
+        if s.cycle_travel_mm>0:
+            actual_dy=s.cycle_travel_mm/lines
+            if math.ceil(s.target_length_mm/actual_dy-1e-10)>height:blocking.append('实测周期走料表明产品占用行数超过当前图高，会裁掉产品，请调整方案。')
+            if abs(100*(actual_dy/dx-1))>s.frequency_tolerance_percent+1e-9:blocking.append('实测纵向采样与横向精度不一致，不能保证无拉伸，请校准采样或机械节拍。')
+    if s.framing_source!='legacy' and fov_x<s.target_width_mm-1e-8:blocking.append('当前工作距离对应视野小于材料宽度。')
     offset_x=(s.sensor_width-width)//2 if s.centered_x else s.offset_x
     if s.centered_x:offset_x=align(offset_x,'OffsetX',False)
     if width<needed_w or height<needed_h:blocking.append('手动ROI不足以覆盖所需检测范围。')
@@ -218,6 +261,7 @@ def calculate(settings,limits=None):
     else:
         if s.exposure_us>60_000_000/s.products_per_minute:blocking.append('曝光时间超过产品帧周期。')
     blur=required*dy*s.exposure_us/1_000_000 if required is not None else None
+    if cycle:blur=required*s.cycle_travel_mm/lines*s.exposure_us/1_000_000 if s.cycle_travel_mm>0 else None
     entries=[node('OffsetX','int',offset_x),node('Width','int',width),node('Height','int',height)]
     entries.extend([node('AcquisitionMode','enum','Continuous'),node('ExposureMode','enum','Timed',{'TriggerSelector':'LineStart'} if s.kind=='line' else {})])
     if s.frame_selector=='FrameBurstStart':entries.append(node('AcquisitionBurstFrameCount','int',1,{'TriggerSelector':s.frame_selector}))
@@ -255,12 +299,17 @@ def calculate(settings,limits=None):
     if len({node_id(n) for n in entries})!=len(entries):raise CameraError('配置产生了重复或冲突节点。')
     return {'schema':'vt-camera-plan/1','settings':config_dict(s),'metrics':{
         'x_mm_per_px':dx,'y_mm_per_px':dy,'fov_width_mm':fov_x,'xy_difference_percent':aspect,
-        'working_distance_mm':dx*s.focal_length_mm/(s.pixel_pitch_um/1000)+(s.focal_length_mm-s.principal_plane_offset_mm if s.optics_method=='thin_lens' else 0) if s.precision_source=='optics' else s.working_distance_mm,
+        'working_distance_mm':dx*s.focal_length_mm/(s.pixel_pitch_um/1000)+(s.focal_length_mm-s.principal_plane_offset_mm if s.optics_method=='thin_lens' else 0) if s.precision_source=='optics' or s.framing_source!='legacy' else s.working_distance_mm,
         'sensor_active_width_mm':s.sensor_width*s.pixel_pitch_um/1000,
         'optical_magnification':s.pixel_pitch_um/1000/dx if s.pixel_pitch_um>0 else None,
         'optics_method':s.optics_method if s.precision_source=='optics' else s.precision_source,
         'frequency_solution':frequency_solution,'target_y_mm_per_px':target_dy,
-        'y_sampling_error_percent':100*(dy/target_dy-1) if s.kind=='line' and s.auto_frequency else None,
+        'y_sampling_error_percent':100*(dy/target_dy-1) if s.kind=='line' and s.auto_frequency and not cycle else None,
+        'cycle_idle_available':math.floor(lines+1e-8)-height if lines is not None else None,
+        'cycle_travel_for_square_mm':lines*dx if lines is not None else None,
+        'actual_y_mm_per_px':s.cycle_travel_mm/lines if cycle and s.cycle_travel_mm>0 else None,
+        'actual_product_height_lines':math.ceil(s.target_length_mm*lines/s.cycle_travel_mm-1e-10) if cycle and s.cycle_travel_mm>0 else None,
+        'horizontal_margin_percent_actual':100*(fov_x/s.target_width_mm-1),
         'effective_counts_per_product':s.ppr*s.edge_factor*s.encoder_revs if lines is not None else None,
         'line_triggers_per_cycle':lines,'lines_per_product':lines,'required_line_rate_hz':required,'recommended_line_rate_hz':recommended,
         'product_height_lines':product_h,'vertical_margin_lines':margin_h,'background_height_lines':max(0,height-product_h),

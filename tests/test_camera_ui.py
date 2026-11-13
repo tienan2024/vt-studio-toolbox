@@ -28,7 +28,7 @@ class CameraDesktopTests(unittest.TestCase):
         w=ToolboxWindow();p=w.camera
         try:
             w.select_page(3);self.assertTrue(w.camera_nav.isChecked());self.assertEqual(w.pages.count(),4)
-            self.assertEqual(set(p.controls),{f.name for f in fields(CameraSettings)});self.assertEqual(p.plan['metrics']['lines_per_product'],3000)
+            self.assertEqual(set(p.controls),{f.name for f in fields(CameraSettings)});self.assertEqual(p.plan['metrics']['lines_per_product'],4000)
             self.assertFalse(p.write_button.isEnabled())
             s=CameraSettings(kind='area',target_length_mm=120,frame_selector='FrameStart');p.load_settings(s)
             self.assertFalse(p.controls['ppr'].isEnabled());self.assertTrue(p.controls['sensor_height'].isEnabled())
@@ -38,11 +38,13 @@ class CameraDesktopTests(unittest.TestCase):
     def test_simple_default_and_reveal_settings_details_and_camera_actions(self):
         w=ToolboxWindow();w.show();w.select_page(3);p=w.camera;self.app.processEvents()
         try:
-            self.assertEqual(p.metrics.rowCount(),5);self.assertFalse(p.form_tabs.isTabVisible(p.basic_tab_count))
-            self.assertGreaterEqual(p.metrics.viewport().height(),sum(p.metrics.rowHeight(i) for i in range(5)))
+            self.assertEqual(p.metrics.rowCount(),7);self.assertFalse(p.form_tabs.isTabVisible(p.basic_tab_count))
+            self.assertGreaterEqual(p.metrics.viewport().height(),sum(p.metrics.rowHeight(i) for i in range(7)))
+            # Qt frame borders may share up to two logical pixels at fractional DPI.
+            self.assertLessEqual(p.metrics.geometry().bottom(),p.optics_summary.geometry().top()+2)
             self.assertTrue(p.devices_bar.isHidden());self.assertTrue(p.device_actions.isHidden());self.assertTrue(p.tabs.isHidden())
-            self.assertFalse(p.controls['target_width_mm'].isHidden());self.assertFalse(p.controls['focal_length_mm'].isHidden())
-            p.advanced_button.click();self.assertTrue(p.form_tabs.isTabVisible(p.basic_tab_count));self.assertEqual(p.form_tabs.currentIndex(),p.basic_tab_count)
+            self.assertFalse(p.controls['target_width_mm'].isHidden());self.assertTrue(p.controls['focal_length_mm'].isHidden())
+            p.advanced_button.click();self.assertTrue(p.form_tabs.isTabVisible(p.basic_tab_count));self.assertEqual(p.form_tabs.currentIndex(),4)
             p.advanced_button.click();self.assertEqual(p.form_tabs.currentIndex(),0)
             p.details_button.click();self.assertFalse(p.tabs.isHidden());self.assertTrue(p.frame_preview.isHidden())
             p.connection_button.click();self.assertFalse(p.devices_bar.isHidden());self.assertFalse(p.device_actions.isHidden())
@@ -60,10 +62,10 @@ class CameraDesktopTests(unittest.TestCase):
     def test_styled_controls_keep_popup_selection_and_distinct_plus_minus_hit_targets(self):
         w=ToolboxWindow();w.show();w.select_page(3);p=w.camera;self.app.processEvents()
         try:
-            combo=p.optical_mode;combo.showPopup();self.app.processEvents()
+            combo=p.controls['framing_source'];combo.showPopup();self.app.processEvents()
             self.assertTrue(combo.view().isVisible());self.assertGreaterEqual(combo.view().sizeHintForRow(0),32)
             QTest.keyClick(combo,Qt.Key.Key_Down);QTest.keyClick(combo,Qt.Key.Key_Return);self.app.processEvents()
-            self.assertEqual(combo.currentData(),'precision_to_wd');p.recalculate()
+            self.assertEqual(combo.currentData(),'distance');p.recalculate()
             spin=p.controls['target_width_mm'];option=QStyleOptionSpinBox();spin.initStyleOption(option)
             up=spin.style().subControlRect(QStyle.ComplexControl.CC_SpinBox,option,QStyle.SubControl.SC_SpinBoxUp,spin)
             down=spin.style().subControlRect(QStyle.ComplexControl.CC_SpinBox,option,QStyle.SubControl.SC_SpinBoxDown,spin)
@@ -97,29 +99,30 @@ class CameraDesktopTests(unittest.TestCase):
     def test_mvs_tabs_presets_inverse_optics_and_bilingual_device_options(self):
         w=ToolboxWindow();w.select_page(3);p=w.camera
         try:
-            self.assertEqual([p.form_tabs.tabText(i) for i in range(3)],['产品参数','采集触发','数字 IO'])
-            self.assertEqual(p.parameter_table.rowCount(),13)
+            self.assertEqual([p.form_tabs.tabText(i) for i in range(3)],['材料与视野','编码器与图高','采集触发'])
+            self.assertIn('horizontal_margin_percent',p.controls)
             p.camera_type.setCurrentIndex(p.camera_type.findData('line2k'));p.recalculate()
             self.assertEqual(p.settings().sensor_width,2048);self.assertEqual(p.settings().pixel_pitch_um,7)
             self.assertEqual(p.settings().focal_length_mm,12);self.assertFalse(p.controls['focal_length_mm'].isEnabled())
             self.assertEqual((p.settings().frame_line,p.settings().encoder_line),('Line3','Line1'))
             p.camera_type.setCurrentIndex(p.camera_type.findData('area5mp'));p.recalculate()
+            p.controls['target_length_mm'].setValue(300);p.recalculate()
             self.assertTrue(p.line_trigger_group.isHidden());self.assertEqual(p.settings().frame_selector,'FrameStart')
             self.assertFalse(any(n['key']=='EncoderSourceA' for n in p.plan['nodes']))
             p.optical_mode.setCurrentIndex(p.optical_mode.findData('precision_to_wd'));p.controls['x_mm_per_px'].setValue(.15);p.recalculate()
             self.assertTrue(p.controls['x_mm_per_px'].isEnabled());self.assertFalse(p.controls['working_distance_mm'].isEnabled())
             self.assertAlmostEqual(p.controls['working_distance_mm'].value(),.15*6/.00345,places=3)
             self.assertFalse(p.plan['blocking'])
-            p.advanced_button.click();self.assertFalse(p.form_tabs.isTabVisible(4))
+            p.advanced_button.click();self.assertFalse(p.form_tabs.isTabVisible(1))
             p.camera_type.setCurrentIndex(p.camera_type.findData('line4k'));p.recalculate()
-            self.assertFalse(p.line_trigger_group.isHidden());self.assertTrue(p.form_tabs.isTabVisible(4))
+            self.assertFalse(p.line_trigger_group.isHidden());self.assertTrue(p.form_tabs.isTabVisible(1))
             p.output_caps={'Line0':{'status':'readable','choices':['ExposureStartActive','CounterActive']}}
             p.refresh_output_choices();source=p.controls['output0_source']
             self.assertFalse(source.isEditable());source.setCurrentIndex(source.findData('CounterActive'));p.recalculate()
             raw=p.settings().output0_source;self.assertEqual(source.currentText(),'计数器有效')
             p.language_box.setCurrentIndex(p.language_box.findData('en'))
             self.assertEqual(source.currentText(),'CounterActive');self.assertEqual(p.settings().output0_source,raw)
-            self.assertEqual(p.form_tabs.tabText(2),'Digital IO')
+            self.assertEqual(p.form_tabs.tabText(3),'Digital IO')
             p.optical_mode.setCurrentIndex(p.optical_mode.findData('fov'));p.recalculate()
             self.assertAlmostEqual(p.controls['x_mm_per_px'].value(),p.plan['metrics']['x_mm_per_px'],places=6)
             form=p.field_forms['working_distance_mm']

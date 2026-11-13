@@ -239,17 +239,17 @@ def execute(args, cancel):
         if args.progress and sys.stderr is not None:
             print(json.dumps(event,ensure_ascii=False),file=sys.stderr,flush=True)
     if args.command.startswith('camera-'):
-        from camera_model import CameraSettings,config_dict,settings_from_dict,calculate
+        from camera_model import CameraSettings,config_dict,settings_from_dict,calculate,workflow_settings
         def read_camera_json(path):
             p=Path(path)
             if p.stat().st_size>1_000_000:raise SynthesisError('相机配置/对比文件超过1MB。')
             return json.loads(p.read_text(encoding='utf-8-sig'))
         if args.command=='camera-template':
-            data=config_dict(CameraSettings())
+            data=config_dict(workflow_settings())
             if args.output:save_new_json(args.output,data)
             return data,0
         if args.command=='camera-plan':
-            data=calculate(settings_from_dict(read_camera_json(args.config)) if args.config else CameraSettings())
+            data=calculate(settings_from_dict(read_camera_json(args.config)) if args.config else workflow_settings())
             if args.output:save_new_json(args.output,data)
             return data,0 if not data['blocking'] else 1
         from camera_sdk import enumerate_cameras

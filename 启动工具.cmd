@@ -1,6 +1,10 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
+if exist "release\7.5.0\VTStudioToolbox\VTStudioToolbox.exe" (
+  start "" "release\7.5.0\VTStudioToolbox\VTStudioToolbox.exe"
+  exit /b
+)
 if exist "release\7.4.0\VTStudioToolbox\VTStudioToolbox.exe" (
   start "" "release\7.4.0\VTStudioToolbox\VTStudioToolbox.exe"
   exit /b

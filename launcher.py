@@ -326,8 +326,10 @@ def verify_package(report_path):
             report['sol_apply_adapter_available']=True
             toolbox.select_page(3);camera_page=toolbox.camera
             camera_page.recalculate();metrics=camera_page.plan['metrics']
-            if metrics['lines_per_product']!=3000 or metrics['required_line_rate_hz']!=40000 or camera_page.write_button.isEnabled():
+            if (metrics['width'],metrics['height'],metrics['product_height_lines'],metrics['cycle_idle_available'])!=(2048,3800,3724,200) or metrics['lines_per_product']!=4000 or camera_page.write_button.isEnabled():
                 raise RuntimeError('Frozen camera calculation or write guard failed')
+            if camera_page.plan['settings']['multiplier']!=4:raise RuntimeError('Cycle capacity multiplier failed')
+            report['camera_cycle_capacity']=True
             from camera_model import CameraSettings
             camera_page.load_settings(CameraSettings(kind='area',target_length_mm=120,frame_selector='FrameStart'))
             if any(n['key']=='PreDivider' for n in camera_page.plan['nodes']) or camera_page.controls['ppr'].isEnabled():
@@ -350,7 +352,7 @@ def verify_package(report_path):
             if not combo.view().isVisible():raise RuntimeError('Frozen styled camera dropdown did not open')
             combo.hidePopup();report['camera_styled_controls']=True
             camera_page.camera_type.setCurrentIndex(camera_page.camera_type.findData('area5mp'));camera_page.recalculate()
-            if not camera_page.line_trigger_group.isHidden() or camera_page.parameter_table.rowCount()!=13:
+            if not camera_page.line_trigger_group.isHidden() or 'horizontal_margin_percent' not in camera_page.controls:
                 raise RuntimeError('MVS camera tabs or area trigger visibility failed')
             camera_page.optical_mode.setCurrentIndex(camera_page.optical_mode.findData('precision_to_wd'))
             camera_page.controls['x_mm_per_px'].setValue(.15);camera_page.recalculate()

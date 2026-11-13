@@ -21,7 +21,7 @@ class CameraCLITests(unittest.TestCase):
             config=Path(folder)/'camera.json';plan=Path(folder)/'plan.json'
             self.cli('camera-template','--output',config)
             result=self.cli('camera-plan','--config',config,'--output',plan)['data']
-            self.assertEqual(result['metrics']['lines_per_product'],3000);self.assertEqual(result['metrics']['recommended_line_rate_hz'],45000)
+            self.assertEqual(result['metrics']['lines_per_product'],4000);self.assertEqual(result['metrics']['recommended_line_rate_hz'],23000)
             self.assertEqual(json.loads(plan.read_text(encoding='utf-8')),result)
             self.cli('camera-template','--output',config,code=1)
             data=json.loads(config.read_text(encoding='utf-8'));data['height_override']=3200;config.write_text(json.dumps(data),encoding='utf-8')

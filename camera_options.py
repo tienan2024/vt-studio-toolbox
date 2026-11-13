@@ -26,6 +26,10 @@ for _key,_p in PRESETS.items():
     _p['focal_length_mm']=LENSES[_p['lens_model']]['focal_length_mm']
 
 LABELS={
+    'material':('材料宽度 → 工作距离','Material → distance'),
+    'distance':('工作距离 → 视野','Distance → FOV'),
+    'cycle':('按Z周期推荐整数倍频','Integer cycle capacity'),
+    'pitch':('按实测走料匹配Y精度','Measured sampling pitch'),
     'quick':('快速估算','Quick estimate'),'thin_lens':('专业计算','Professional'),
     'custom':('自定义 / 已连接设备','Custom / connected device'),
     'wd_to_precision':('工作距离 → 精度','Distance → precision'),
@@ -51,6 +55,9 @@ LABELS={
 }
 
 FIELD_LABELS={
+    'framing_source':'Framing','horizontal_margin_percent':'Horizontal margin',
+    'cycle_idle_lines':'Min. cycle idle','height_rounding':'Height rounding',
+    'cycle_travel_mm':'Measured Z-cycle travel','frequency_strategy':'Frequency strategy',
     'target_width_mm':'Product width','target_length_mm':'Product length',
     'working_distance_mm':'Working distance','focal_length_mm':'Focal length',
     'pixel_pitch_um':'Pixel pitch','x_mm_per_px':'Pixel precision',

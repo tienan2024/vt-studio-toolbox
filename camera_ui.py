@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabe
     QSplitter,QScrollArea,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,
     QPlainTextEdit,QFileDialog,QProgressBar,QMenu)
 from styled_controls import make_combo
-from camera_model import CameraSettings,CameraError,calculate,config_dict,settings_from_dict,import_mfs_text,fingerprint
+from camera_model import CameraSettings,CameraError,calculate,config_dict,settings_from_dict,import_mfs_text,fingerprint,workflow_settings
 from camera_sdk import discover_mvs,enumerate_cameras
 from camera_transaction import inspect_camera,preview_camera,write_camera
 from camera_options import PRESETS,FIELD_LABELS,LABELS,option_label
@@ -45,7 +45,10 @@ class FramePreview(QWidget):
         p.setPen(QPen(QColor('#c8d1dd'),1));p.setBrush(QColor('#e8eef4'));p.drawRect(rect)
         product=QRectF(rect.center().x()-s['target_width_mm']*scale/2,rect.center().y()-s['target_length_mm']*scale/2,s['target_width_mm']*scale,s['target_length_mm']*scale)
         p.setBrush(QColor('#f5e4d8'));p.setPen(QPen(QColor('#b5531c'),1));p.drawRect(product)
-        p.setPen(QColor('#263548'));p.drawText(product,Qt.AlignmentFlag.AlignCenter,'产品\n'+format(s['target_width_mm'],'.6g')+' × '+format(s['target_length_mm'],'.6g')+' mm')
+        p.setPen(QColor('#263548'))
+        text='材料\nW '+format(s['target_width_mm'],'.6g')+' mm\nL '+format(s['target_length_mm'],'.6g')+' mm'
+        label=QRectF(product.right()+8,product.center().y()-35,150,80) if product.width()<140 else product
+        p.drawText(label,Qt.AlignmentFlag.AlignCenter,text)
         p.setPen(QColor('#526377'));p.drawText(QRectF(0,0,self.width(),20),Qt.AlignmentFlag.AlignCenter,'居中示意 · 产品前后位置由下位机相位决定')
         p.end()
 
@@ -104,24 +107,27 @@ class CameraPage(QWidget):
         self.camera_type.addItem('自定义 / 已连接设备','custom')
         left.addWidget(self.camera_type);self.camera_info=QLabel();self.camera_info.setObjectName('Subtle');self.camera_info.setWordWrap(True);left.addWidget(self.camera_info)
         self.form_tabs=QTabWidget();left.addWidget(self.form_tabs,1)
-        station=PropertyForm(self,'产品参数');self.parameter_table=station.table
-        trigger=self.form_tab('采集触发');io=PropertyForm(self,'数字 IO');self.io_table=io.table
-        calibration=self.form_tab('工位标定');encoder=self.form_tab('编码器');image=self.form_tab('成像')
+        station=PropertyForm(self,'材料与视野');self.parameter_table=station.table
+        encoder=PropertyForm(self,'编码器与图高');trigger=self.form_tab('采集触发')
+        io=PropertyForm(self,'数字 IO');self.io_table=io.table
+        calibration=self.form_tab('专业标定');image=self.form_tab('成像')
         self.basic_tab_count=3
         self.combo(station,'optics_method','计算模式',[(option_label(v),v) for v in ('quick','thin_lens')])
-        self.number(station,'target_width_mm','产品宽度 / mm',.001,100000,3)
-        self.number(station,'target_length_mm','产品长度 / mm',.001,100000,3)
+        self.number(station,'target_width_mm','材料宽度 / mm',.001,100000,3)
+        self.number(station,'target_length_mm','材料长度 / mm',.001,100000,3)
+        self.combo(station,'framing_source','计算方向',[('材料宽度 → 工作距离','material'),('工作距离 → 视野','distance'),('原有计算配置','legacy')])
+        self.number(station,'horizontal_margin_percent','横向总余量 / %',0,1000,2)
         self.optical_mode=self.styled_combo()
         for value in ('wd_to_precision','precision_to_wd','fov'):self.optical_mode.addItem(option_label(value),value)
-        self.optical_mode_label=QLabel('计算方向');station.addRow(self.optical_mode_label,self.optical_mode)
+        self.optical_mode_label=QLabel('原计算方向');calibration.addRow(self.optical_mode_label,self.optical_mode)
         self.number(station,'working_distance_mm','工作距离 / mm',.001,100000,3)
         self.number(station,'focal_length_mm','镜头焦距 / mm',0,1000,3,special='请填写')
         self.number(station,'pixel_pitch_um','像元尺寸 / μm',0,1000,3,special='请填写')
         self.number(station,'principal_plane_offset_mm','主平面偏移 / mm',-10000,10000,3)
         self.controls['principal_plane_offset_mm'].setToolTip('u = 工作距离 + 偏移。若WD从镜头前端量起，主平面在前端后方时填正值；未知填0，仅作模型估算。')
-        self.number(station,'fov_width_mm','实测全幅 X / mm',.001,100000,3)
-        self.number(station,'fov_height_mm','实测全幅 Y / mm',.001,100000,3)
-        self.number(station,'x_mm_per_px','横向精度 / mm/px',.000001,1000,6)
+        self.number(calibration,'fov_width_mm','实测全幅 X / mm',.001,100000,3)
+        self.number(calibration,'fov_height_mm','实测全幅 Y / mm',.001,100000,3)
+        self.number(calibration,'x_mm_per_px','横向精度 / mm/px',.000001,1000,6)
         self.controls['x_mm_per_px'].setToolTip('线扫为横向光学精度；纵向由工位Y标定决定。镜头参数为近似估算。')
         self.number(station,'image_horizontal_margin_mm','左右总留边 / mm',0,100000,3)
         self.number(station,'image_vertical_margin_mm','前后总留白 / mm',0,100000,3)
@@ -139,18 +145,19 @@ class CameraPage(QWidget):
         self.number(calibration,'calibration_length_mm','标定产品长度 / mm',.001,100000,3)
         self.integer(calibration,'calibration_rows','图中产品占用行数',1,1000000)
         self.note(calibration,'线扫Y精度由行采样决定，可用未缩放产品图标定。镜头估算需用实测视野校准。')
-        self.number(encoder,'products_per_minute','最高产能 / 片/分',.01,100000,2)
+        self.number(image,'products_per_minute','最高产能 / 片/分',.01,100000,2)
         self.check(encoder,'auto_frequency','自动计算倍分频')
-        self.number(encoder,'encoder_travel_mm_per_rev','编码器每圈走料 / mm',0,1000000,4,special='填写实测长度')
-        self.number(encoder,'frequency_tolerance_percent','Y 采样允许误差 / %',0,100,3)
+        self.number(calibration,'encoder_travel_mm_per_rev','编码器每圈走料 / mm',0,1000000,4,special='填写实测长度')
+        self.number(calibration,'frequency_tolerance_percent','Y 采样允许误差 / %',0,100,3)
         self.controls['encoder_travel_mm_per_rev'].setToolTip('编码器轴实际旋转一圈，对应材料行进的距离；通过实测或传动机构计算，不能用产品长度代替。')
         self.integer(encoder,'ppr','编码器 P/R',1,10000000)
         self.combo(encoder,'edge_factor','实际计数倍率',[('×1',1),('×2',2),('×4',4)])
-        self.number(encoder,'encoder_revs','每产品编码器转数',.000001,1000,6)
+        self.controls['edge_factor'].setToolTip('×1示例为A相上升沿；倍率应与设备实际有效计数一致，本选项不自动改变硬件计数模式。')
+        self.number(encoder,'encoder_revs','每帧间隔圈数',.000001,1000,6)
         self.integer(encoder,'pre_divider','预分频 PreDivider',1,1000000)
         self.integer(encoder,'multiplier','倍频 Multiplier',1,1000000)
         self.integer(encoder,'post_divider','后分频 PostDivider',1,1000000)
-        self.number(encoder,'rate_margin_percent','行频能力预留 / %',0,100,1)
+        self.number(image,'rate_margin_percent','行频能力预留 / %',0,100,1)
         self.combo(io,'frame_selector','帧触发选择器',[('FrameBurstStart','FrameBurstStart'),('FrameStart','FrameStart')])
         self.combo(io,'frame_edge','帧触发边沿',[('上升沿','RisingEdge'),('下降沿','FallingEdge')])
         self.combo(io,'line_edge','行触发边沿',[('下降沿','FallingEdge'),('上升沿','RisingEdge')])
@@ -175,7 +182,11 @@ class CameraPage(QWidget):
         self.check(image,'reverse_x','水平翻转')
         self.number(image,'black_level','黑电平（-1=保持）',-1,65535,2)
         self.integer(image,'width_override','Width / px',0,65536,special='自动计算')
-        self.integer(image,'height_override','Height / px',0,1000000,special='自动计算')
+        self.integer(encoder,'height_override','取图高度 / 行',0,1000000,special='自动建议')
+        self.integer(encoder,'cycle_idle_lines','最少周期空档 / 行',1,1000000)
+        self.integer(calibration,'height_rounding','图高取整步长 / 行',1,100000)
+        self.number(calibration,'cycle_travel_mm','实测每Z周期走料 / mm',0,1000000,6,special='未标定')
+        self.combo(calibration,'frequency_strategy','倍分频算法',[('按周期凑整数倍频','cycle'),('按实测走料匹配Y','pitch')])
         self.check(image,'centered_x','X 居中');self.integer(image,'offset_x','OffsetX / px',0,65536)
         self.integer(image,'offset_y','OffsetY / px',0,65536)
         self.number(image,'line_rate_override','手动行频 / Hz',0,100000000,0,special='按产能计算')
@@ -209,7 +220,7 @@ class CameraPage(QWidget):
         self.message=QLabel();self.message.setObjectName('Message');self.message.setWordWrap(True);self.message.setTextFormat(Qt.TextFormat.PlainText);root.addWidget(self.message)
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.timeout.connect(self.recalculate)
         self.device.currentIndexChanged.connect(self.device_changed)
-        self.load_settings(CameraSettings(camera_model_id='MV-CL042-91GM',sensor_height=2,precision_source='optics',focal_length_mm=25,pixel_pitch_um=7,auto_frequency=True,encoder_travel_mm_per_rev=300));self.notify('相机/镜头为固定组合；工位走料、P/R及距离为示例，请按实际工位调整。')
+        self.load_settings(workflow_settings());self.notify('按材料尺寸规划；实际无拉伸需用原始产品图或周期走料标定。')
 
     @staticmethod
     def button(text,slot,layout):
@@ -304,6 +315,7 @@ class CameraPage(QWidget):
     def optical_mode_changed(self,*args):
         if self._loading:return
         value=self.optical_mode.currentData();self._loading=True
+        self.controls['framing_source'].setCurrentIndex(self.controls['framing_source'].findData('legacy'))
         source=value if value in ('fov','precision') else 'optics'
         self.controls['precision_source'].setCurrentIndex(self.controls['precision_source'].findData(source))
         if source=='optics':self.controls['optics_direction'].setCurrentIndex(self.controls['optics_direction'].findData(value))
@@ -328,7 +340,7 @@ class CameraPage(QWidget):
                 value=widget.itemData(i)
                 if value in LABELS or value in PRESETS:widget.setItemText(i,option_label(value,self.language))
             widget.blockSignals(blocked)
-        names=['Product','Trigger','Digital IO','Calibration','Encoder','Imaging'] if en else ['产品参数','采集触发','数字 IO','工位标定','编码器','成像']
+        names=['Material & FOV','Encoder & Height','Trigger','Digital IO','Calibration','Imaging'] if en else ['材料与视野','编码器与图高','采集触发','数字 IO','专业标定','成像']
         for i,name in enumerate(names):self.form_tabs.setTabText(i,name)
         self.optical_mode_label.setText('Calculate' if en else '计算方向')
         for form in self.property_forms:form.table.setHorizontalHeaderLabels(['Parameter','Value','Unit'] if en else ['参数','设置值','单位'])
@@ -422,20 +434,36 @@ class CameraPage(QWidget):
         for prefix in ('output0','output4'):
             for suffix in ('line','source'):self.controls[prefix+'_'+suffix].setEnabled(self.controls[prefix+'_enabled'].isChecked())
         self.controls['strobe_duration_us'].setEnabled(self.controls['output4_enabled'].isChecked())
-        self.trigger_help.setText(('Frame trigger only. Default input: Line0.' if self.language=='en' else '面阵仅使用帧触发；默认 Line0，可按实际接线选择。') if not line else ('Frame: Line3. Line: Line1 via encoder and frequency converter.' if self.language=='en' else '参考规范：帧触发 Line3，行触发 Line1，经编码器与 1/3/1 变频链。'))
+        self.trigger_help.setText(('Frame trigger only. Default input: Line0.' if self.language=='en' else '面阵仅使用帧触发；默认 Line0，可按实际接线选择。') if not line else ('Frame: Line3. Line input: Line1 via encoder and frequency converter.' if self.language=='en' else '帧触发 Line3；行输入 Line1，经编码器与自动推荐的倍分频。'))
+        framing=self.controls['framing_source'].currentData();workflow=framing!='legacy';cycle=line and self.controls['frequency_strategy'].currentData()=='cycle'
+        self.controls['working_distance_mm'].setEnabled(framing=='distance' if workflow else optics and not inverse)
+        self.controls['horizontal_margin_percent'].setEnabled(framing=='material')
+        self.field_forms['horizontal_margin_percent'].setRowVisible(self.controls['horizontal_margin_percent'],workflow)
+        for key in ('image_horizontal_margin_mm','image_vertical_margin_mm'):
+            self.field_forms[key].setRowVisible(self.controls[key],not workflow)
+        if workflow:
+            self.field_forms['working_distance_mm'].setRowVisible(self.controls['working_distance_mm'],True)
+            self.field_forms['focal_length_mm'].setRowVisible(self.controls['focal_length_mm'],not known)
+            self.controls['x_mm_per_px'].setEnabled(False)
+        self.field_forms['encoder_travel_mm_per_rev'].setRowVisible(self.controls['encoder_travel_mm_per_rev'],line and not cycle)
+        self.field_forms['cycle_travel_mm'].setRowVisible(self.controls['cycle_travel_mm'],cycle)
+        for key in ('cycle_idle_lines','height_rounding'):self.field_forms[key].setRowVisible(self.controls[key],cycle)
+        if cycle:
+            for key in ('line_y_source','y_mm_per_px','calibration_length_mm','calibration_rows'):
+                self.field_forms[key].setRowVisible(self.controls[key],False)
         self.sync_preset();self.refresh_output_choices()
-        self.form_tabs.setTabVisible(4,line and self.advanced_button.isChecked())
+        self.form_tabs.setTabVisible(1,line)
 
     def toggle_advanced(self,expanded):
         if not expanded and self.form_tabs.currentIndex()>=self.basic_tab_count:self.form_tabs.setCurrentIndex(0)
         for i in range(self.basic_tab_count,self.form_tabs.count()):self.form_tabs.setTabVisible(i,expanded)
-        if self.controls['kind'].currentData()=='area':self.form_tabs.setTabVisible(4,False)
+        if self.controls['kind'].currentData()=='area':self.form_tabs.setTabVisible(1,False)
         self.form_tabs.tabBar().show()
         self.advanced_button.setText(('Less' if expanded else 'More settings') if self.language=='en' else ('收起更多' if expanded else '更多参数'))
-        if expanded:self.form_tabs.setCurrentIndex(self.basic_tab_count)
+        if expanded:self.form_tabs.setCurrentIndex(4)
 
     def toggle_details(self,expanded):
-        self.tabs.setVisible(expanded);self.frame_preview.setVisible(not expanded)
+        self.tabs.setVisible(expanded);self.frame_preview.setVisible(not expanded and self.height()>=680)
         self.result_space.setVisible(not expanded)
         self.details_button.setText('收起参数明细' if expanded else '查看参数明细')
 
@@ -444,6 +472,12 @@ class CameraPage(QWidget):
 
     def showEvent(self,event):
         super().showEvent(event);QTimer.singleShot(0,self.fit_metrics)
+
+    def resizeEvent(self,event):
+        super().resizeEvent(event)
+        if hasattr(self,'details_button'):
+            self.frame_preview.setVisible(not self.details_button.isChecked() and self.height()>=680)
+            QTimer.singleShot(0,self.fit_metrics)
 
     def fit_metrics(self):
         header=self.metrics.horizontalHeader();header.ensurePolished()
@@ -458,6 +492,7 @@ class CameraPage(QWidget):
                 text=str(value);item=QTableWidgetItem(text);item.setToolTip(text);table.setItem(i,j,item)
 
     def render_plan(self,plan):
+        if plan['settings']['framing_source']!='legacy':return self.render_workflow(plan)
         self.plan=plan;m=plan['metrics']
         metrics=[('整张图宽 × 高',str(m['width'])+' × '+str(m['height']),'px'),
             ('产品高度',str(m['product_height_lines']),'行'),
@@ -479,16 +514,48 @@ class CameraPage(QWidget):
         self.summary.setText(text);self.summary.setToolTip('\n'.join(plan['blocking']+plan['warnings']))
         self.optics_summary.setVisible(plan['settings']['optics_method']=='thin_lens' or plan['settings']['precision_source']=='fov')
         self.optics_summary.setText('有效感光宽度 '+format(m['sensor_active_width_mm'],'.4f')+' mm · 横向视野 '+format(m['fov_width_mm'],'.3f')+' mm'+('\n光学倍率 '+format(m['optical_magnification'],'.5f')+' ×' if m['optical_magnification'] else ''))
-        if m['frequency_solution']:
+        if m['frequency_solution'] and m['y_sampling_error_percent'] is not None:
             solution=m['frequency_solution'];self.optics_summary.show()
             self.optics_summary.setText(self.optics_summary.text()+'\n预分频 / 倍频 / 后分频：'+str(solution['pre_divider'])+' / '+str(solution['multiplier'])+' / '+str(solution['post_divider'])+' · Y采样误差 '+format(m['y_sampling_error_percent'],'.4f')+'%'+(' · 设备范围已核对' if solution['limits_verified'] else ' · 离线建议，待设备核对'))
+
+    def render_workflow(self,plan):
+        self.plan=plan;s=plan['settings'];m=plan['metrics'];line=s['kind']=='line'
+        rows=[('视野宽 / 工作距离',format(m['fov_width_mm'],'.3f')+' / '+format(m['working_distance_mm'],'.3f'),'mm'),
+              ('方形像素规划' if line else '光学像素精度',format(m['x_mm_per_px'],'.9f'),'mm/px'),
+              ('产品最少行数',str(m['product_height_lines']),'行'),
+              ('取图宽 × 高',str(m['width'])+' × '+str(m['height']),'px')]
+        if line:
+            rows.extend([('预分 / 倍频 / 后分',str(s['pre_divider'])+' / '+str(s['multiplier'])+' / '+str(s['post_divider']),''),
+                         ('Z周期总行触发',format(m['line_triggers_per_cycle'],'.6g'),'次'),
+                         ('周期剩余空档',str(m['cycle_idle_available']),'行')])
+        else:rows.append(('产品帧频',format(m['frame_rate_hz'],'.3f'),'Hz'))
+        self.fill(self.metrics,rows);self.fit_metrics();self.frame_preview.plan=plan;self.frame_preview.update()
+        self.fill(self.node_table,[[', '.join(n['selectors'].values()) or '全局',n['key'],n['value']] for n in plan['nodes']])
+        self.optics_summary.show()
+        text='图内背景 '+str(m['background_height_lines'])+' 行'
+        if line:text+=' · 有效A计数 '+format(m['effective_counts_per_product'],'.6g')+' / 周期 · 预计行频 '+format(m['required_line_rate_hz'],'.0f')+' Hz'
+        self.optics_summary.setText(text)
+        if plan['blocking']:message='；'.join(plan['blocking'])
+        elif line and s['frequency_strategy']=='cycle':
+            message='周期容量规划；Y采样'+('已提供走料标定。' if m['actual_y_mm_per_px'] else '尚未实测标定。')+' 前后留白位置由下位机相位调整。'
+        else:message='按当前视野计算；镜头模型值请用实测视野核对。'
+        self.summary.setText(message);self.summary.setToolTip('\n'.join(plan['blocking']+plan['warnings']))
 
     def recalculate(self):
         self.timer.stop();self.preview=None;self.write_button.setEnabled(False)
         try:
             self.enable_fields();limits=self.geometry.get('limits') if self.geometry else None
             plan=calculate(self.settings(),limits)
-            if plan['settings']['precision_source']=='optics':
+            if plan['settings']['framing_source']!='legacy':
+                key='working_distance_mm' if plan['settings']['framing_source']=='material' else 'x_mm_per_px'
+                widget=self.controls[key];value=plan['metrics'][key]
+                if not widget.minimum()<=value<=widget.maximum():raise CameraError('计算结果超出输入范围，请调整视野或镜头参数。')
+                blocked=widget.blockSignals(True);widget.setValue(value);widget.blockSignals(blocked)
+                if plan['settings']['framing_source']=='distance':
+                    widget=self.controls['horizontal_margin_percent'];blocked=widget.blockSignals(True)
+                    widget.setValue(max(0,plan['metrics']['horizontal_margin_percent_actual']));widget.blockSignals(blocked)
+                plan=calculate(self.settings(),limits)
+            elif plan['settings']['precision_source']=='optics':
                 key='working_distance_mm' if plan['settings']['optics_direction']=='precision_to_wd' else 'x_mm_per_px'
                 value=plan['metrics'][key];widget=self.controls[key]
                 if not widget.minimum()<=value<=widget.maximum():raise CameraError('计算结果超出输入控件范围，请调整镜头或目标精度。')

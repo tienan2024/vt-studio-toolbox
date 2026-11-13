@@ -157,7 +157,7 @@ class ToolboxWindow(QMainWindow):
             self.page_description.setText('配置产品判定规则，生成 VM 脚本，并编译验证每一项输出。')
         else:
             self.page_title.setText('相机参数')
-            self.page_description.setText('填写产品尺寸与画面留白，计算取图范围和像素精度。')
+            self.page_description.setText('材料尺寸 → 视野与工作距离 → 取图高度 → 编码器倍频。')
 
     def receive_ok(self, paths):
         if self.defect.is_busy():
@@ -176,8 +176,8 @@ class ToolboxWindow(QMainWindow):
             '可将转换结果明确作为 OK 底图送入缺陷合成。\n\n'
             '脚本生成与测试\n配置 NG 类型、独立信号与标签归一化 → 查看代码 → 离线编译测试 → 复制脚本或保存 .cs。\n'
             '可读取SOL变量并自动应用到方案副本，或按清单手工配置。\n\n'
-            '相机参数\n填写现场工位与编码器 → 枚举并读取设备 → 对比参数 → 写入并保存UserSet1。\n'
-            '使用实测视野、已知mm/px，或焦距＋WD＋像元尺寸估算精度；上下留白独立设置。高级设置及相机连接区默认收起。实际写入依赖本机MVS及连接的相机。\n\n'
+            '相机参数\n选择相机及固定镜头 → 填材料宽长与横向总余量 → 计算视野/工作距离及规划精度 → 推荐图高与周期整数倍频。\n'
+            '图高与Z周期总行触发数分开，并保留周期空档。周期行数够用不代表实际无拉伸，需原始产品图或周期走料标定。专业标定/IO/成像在更多参数中；设备写入仍需有效对比。\n\n'
             '原图不覆盖，每个批次单独保存。\n'
             '支持VT缺陷检测原生多边形XML；轮廓与PNG掩膜对应，JSON保留来源。')
 
