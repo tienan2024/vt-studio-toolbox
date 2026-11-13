@@ -91,7 +91,7 @@ class RefinedDesktopTests(unittest.TestCase):
                         scroll.ensureWidgetVisible(d.reference)
                 self.app.processEvents()
                 w.grab().save(str(ROOT/'verification/refined_auto_reference.png'))
-                d.undo_roi();self.assertEqual(len(d.rois),1)
+                d.delete_canvas_annotation('roi-1');self.assertEqual(len(d.rois),1)
                 d.remove_roi();self.assertEqual(d.rois,[]);self.assertIsNotNone(d.asset)
             finally:
                 w.close();self.app.processEvents()

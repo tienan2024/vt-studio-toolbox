@@ -12,12 +12,13 @@ import uuid
 from PIL import Image
 from PySide6.QtCore import Qt, QPointF, QRectF, QThread, Signal, QUrl, QTimer
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QFont, QImage,
-                           QPainter, QPainterPath, QPen, QPixmap, QIcon)
+                           QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QIcon)
+from shiboken6 import isValid
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGraphicsPathItem, QGraphicsScene,
     QGraphicsView, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
-    QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget, QAbstractSpinBox)
+    QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget, QAbstractSpinBox, QMenu)
 
 from engine import (Asset, Settings, SynthesisError, VERSION, MAX_TOTAL_SAMPLES, MAX_ROI_REGIONS, extract_asset,
                     generate_batch, load_image, load_recipe, save_recipe, synthesize)
@@ -75,6 +76,8 @@ def pixmap(image: Image.Image) -> QPixmap:
 class Canvas(QGraphicsView):
     selection_changed = Signal(list)
     zoom_changed = Signal(str)
+    image_changed = Signal()
+    delete_annotation = Signal(str)
 
     def __init__(self, empty_text):
         super().__init__()
@@ -98,11 +101,13 @@ class Canvas(QGraphicsView):
         self.selection_color = "#39dbc4"
         self.overlay = None
         self.auto_fit = True
+        self.annotations = {}
         self.set_empty(empty_text)
 
     def set_empty(self, empty_text):
         self.scene().clear()
         self.image = None
+        self.annotations = {}
         self.selection_item = None
         self.guides = {}
         self.overlay = None
@@ -120,9 +125,11 @@ class Canvas(QGraphicsView):
         text.setDefaultTextColor(QColor("#58687b"))
         self.scene().setSceneRect(QRectF(-8,-8,336,196))
         self.fit_image()
+        self.image_changed.emit()
 
     def set_image(self, image, points=None):
         self.image = image
+        self.annotations = {}
         self.setBackgroundBrush(QColor('#202b30'))
         self.scene().clear()
         self.selection_item = None
@@ -136,6 +143,7 @@ class Canvas(QGraphicsView):
             self.points = [tuple(p) for p in points]
             self._draw(self.points, True)
         self.fit_image()
+        self.image_changed.emit()
 
     def fit_image(self):
         if self.image:
@@ -171,14 +179,22 @@ class Canvas(QGraphicsView):
             self._draw(self.points, True)
 
     def set_guide(self, name, box=None, color="#72b8ed", dashed=True):
+        points = None
+        if box is not None:
+            l,t,r,b = box
+            points = [(l,t),(r,t),(r,b),(l,b)]
+        self.set_polygon_guide(name, points, color, dashed)
+
+    def set_polygon_guide(self, name, points=None, color="#72b8ed", dashed=False):
         old = self.guides.pop(name, None)
         if old is not None:
             self.scene().removeItem(old)
-        if box is None or self.image is None:
+        if not points or self.image is None:
             return
-        l,t,r,b = box
-        path = QPainterPath()
-        path.addRect(QRectF(l,t,r-l,b-t))
+        path = QPainterPath(QPointF(*points[0]))
+        for point in points[1:]:
+            path.lineTo(QPointF(*point))
+        path.closeSubpath()
         item = QGraphicsPathItem(path)
         pen = QPen(QColor(color),2)
         pen.setCosmetic(True)
@@ -232,7 +248,7 @@ class Canvas(QGraphicsView):
         if not self.image:
             return super().mousePressEvent(event)
         if event.button() == Qt.MouseButton.RightButton:
-            self.pan = event.position().toPoint()
+            self.pan = event.globalPosition().toPoint()
             self.pan_origin = self.pan
             self.pan_dragged = False
             return
@@ -249,7 +265,7 @@ class Canvas(QGraphicsView):
 
     def mouseMoveEvent(self, event):
         if self.pan is not None:
-            here = event.position().toPoint()
+            here = event.globalPosition().toPoint()
             if not self.pan_dragged:
                 if (here-self.pan_origin).manhattanLength() < QApplication.startDragDistance():
                     return
@@ -258,7 +274,16 @@ class Canvas(QGraphicsView):
                 self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
             delta = here-self.pan
             self.horizontalScrollBar().setValue(self.horizontalScrollBar().value()-delta.x())
-            self.verticalScrollBar().setValue(self.verticalScrollBar().value()-delta.y())
+            bar = self.verticalScrollBar()
+            before = bar.value()
+            bar.setValue(before-delta.y())
+            remaining = delta.y()+bar.value()-before
+            parent = self.parentWidget()
+            while parent is not None and not isinstance(parent, CanvasArea):
+                parent = parent.parentWidget()
+            if parent is not None and remaining:
+                outer_bar = parent.verticalScrollBar()
+                outer_bar.setValue(outer_bar.value()-remaining)
             self.pan = here
             return
         if self.image and self.anchor is not None:
@@ -273,11 +298,14 @@ class Canvas(QGraphicsView):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton:
             click = (self.pan_origin is not None and not self.pan_dragged and
-                     (event.position().toPoint()-self.pan_origin).manhattanLength() < QApplication.startDragDistance())
+                     (event.globalPosition().toPoint()-self.pan_origin).manhattanLength() < QApplication.startDragDistance())
             self.pan,self.pan_origin,self.pan_dragged = None,None,False
             self.viewport().setCursor(Qt.CursorShape.OpenHandCursor if self.mode == 'view' else Qt.CursorShape.CrossCursor)
-            if click and self.mode == 'polygon':
-                self._finish_polygon()
+            if click:
+                if self.mode == 'polygon' and self.draft:
+                    self._finish_polygon()
+                else:
+                    self._annotation_menu_at(event.position().toPoint(), event.globalPosition().toPoint())
             return
         if self.image and self.anchor is not None and event.button() == Qt.MouseButton.LeftButton:
             x, y = self.anchor
@@ -303,6 +331,37 @@ class Canvas(QGraphicsView):
     def contextMenuEvent(self, event):
         event.accept()  # Right-button canvas gestures are handled above.
 
+    def annotation_hits(self, pos):
+        """Hit test in image coordinates, with a screen-sized edge tolerance."""
+        point = self.mapToScene(pos)
+        stroker = QPainterPathStroker()
+        stroker.setWidth(12 / max(.02, self.transform().m11()))
+        hits = []
+        for key, (points, label) in self.annotations.items():
+            if len(points) < 3:
+                continue
+            path = QPainterPath(QPointF(*points[0]))
+            for vertex in points[1:]:
+                path.lineTo(QPointF(*vertex))
+            path.closeSubpath()
+            if path.contains(point) or stroker.createStroke(path).contains(point):
+                hits.append((key, label))
+        return hits
+
+    def _annotation_menu_at(self, pos, global_pos):
+        hits = self.annotation_hits(pos)
+        if not hits:
+            return
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        menu.setStyleSheet('QMenu { background:#ffffff; color:#263548; border:1px solid #c8d1dd; padding:5px; }'
+                          'QMenu::item { padding:8px 18px; } QMenu::item:selected { background:#fff0e4; color:#78360e; }')
+        for key, label in hits:
+            action = menu.addAction('删除' + label)
+            action.triggered.connect(lambda checked=False, key=key: self.delete_annotation.emit(key))
+        self._annotation_menu = menu
+        menu.popup(global_pos)
+
     def wheelEvent(self, event):
         if self.image:
             factor = 1.2 if event.angleDelta().y() > 0 else 1/1.2
@@ -322,6 +381,42 @@ class Canvas(QGraphicsView):
             tinted.putalpha(mask.point(lambda n: int(n*0.42)))
             self.overlay = self.scene().addPixmap(pixmap(tinted))
             self.overlay.setZValue(1)
+
+
+class CanvasArea(QScrollArea):
+    """Let tall source images use a taller canvas without stretching the window."""
+    def __init__(self, canvas):
+        super().__init__()
+        self.canvas = canvas
+        self.pending = False
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setWidget(canvas)
+        canvas.image_changed.connect(self.schedule_height)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.schedule_height()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.schedule_height()
+
+    def schedule_height(self):
+        if not self.pending:
+            self.pending = True
+            QTimer.singleShot(0, self.update_height)
+
+    def update_height(self):
+        self.pending = False
+        image = self.canvas.image
+        # Reserve scrollbar width consistently. Using viewport width here can
+        # alternate heights when a nearly fitting image shows/hides the bar.
+        width = self.contentsRect().width()-self.verticalScrollBar().sizeHint().width()-8
+        height = 180 if image is None else max(240, min(3200,
+            math.ceil(max(1, width) * image.height / image.width) + 8))
+        self.canvas.setMinimumHeight(height)
 
 
 class Worker(QThread):
@@ -347,6 +442,8 @@ class MainWindow(QMainWindow):
     def __init__(self, embedded=False):
         super().__init__()
         self.embedded = embedded
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._busy_focus = None
         if embedded:
             self.setWindowFlags(Qt.WindowType.Widget)
         self.setWindowTitle("VT 缺陷合成工具")
@@ -481,7 +578,6 @@ class MainWindow(QMainWindow):
         g.addWidget(self.roi_list)
         roi_actions=QHBoxLayout()
         roi_actions.addWidget(self.button('删除选中范围',self.remove_roi))
-        roi_actions.addWidget(self.button('撤销上一框',self.undo_roi))
         g.addLayout(roi_actions)
         self.roi_info = QLabel("当前：全图。请在 NG 上框出相同材料允许出现缺陷的区域。")
         self.roi_info.setObjectName("Subtle")
@@ -569,13 +665,15 @@ class MainWindow(QMainWindow):
                 canvas.setMinimumHeight(160)
         self.ok_canvas.selection_changed.connect(self.set_roi)
         self.ng_canvas.selection_changed.connect(self.on_ng_selection)
+        self.ok_canvas.delete_annotation.connect(self.delete_canvas_annotation)
+        self.ng_canvas.delete_annotation.connect(self.delete_canvas_annotation)
         self.ng_canvas.selection_color = "#72b8ed"
         self.ng_canvas.set_mode("rectangle")
         self.ok_canvas.set_mode("rectangle")
         self._canvas_tab("OK 底图 / 允许区域", self.ok_canvas, "rectangle",
-                         "绿色框内允许生成整个缺陷；蓝色虚框是原 NG 缺陷位置参考。")
+                         "右键点击标注可删除单个范围；右键拖动平移。蓝色虚框是原 NG 缺陷位置参考。")
         self._canvas_tab("NG 图 / 缺陷圈选", self.ng_canvas, "polygon",
-                         "取缺陷与范围分别框选。点击「生成范围」后拖动可连续追加；右键拖动平移。")
+                         "右键点击标注可删除；右键拖动平移。多边形绘制时右键单击或 Enter 收尾。")
         self._canvas_tab("合成预览", self.preview_canvas, "view",
                          "滚轮缩放，右键按住拖动平移。橙色覆盖层表示实际发生像素变化的区域。")
         self.tabs.currentChanged.connect(lambda _: self._update_message_for_tab())
@@ -704,7 +802,7 @@ class MainWindow(QMainWindow):
         fit.setToolTip('适应窗口显示完整图像')
         row.addWidget(fit)
         layout.addLayout(row)
-        layout.addWidget(canvas, 1)
+        layout.addWidget(CanvasArea(canvas), 1)
         label = QLabel(hint)
         label.setWordWrap(True)
         label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
@@ -1135,12 +1233,21 @@ class MainWindow(QMainWindow):
             return
         regions.pop(index);self._replace_regions(regions)
 
-    def undo_roi(self):
+    def delete_canvas_annotation(self, key):
         if self.is_busy():
             return
-        regions=self.roi_regions()
-        if regions:
-            regions.pop();self._replace_regions(regions)
+        if key == 'asset':
+            self.ng_canvas.set_selection([])
+            self.set_asset([])
+            self.notify('已删除缺陷轮廓，生成范围保持不变。请重新圈选缺陷后生成。')
+        elif key.startswith('roi-'):
+            index = int(key[4:])
+            regions = self.roi_regions()
+            if 0 <= index < len(regions):
+                regions.pop(index)
+                self.selected_roi_index = min(index, len(regions)-1)
+                self._replace_regions(regions)
+                self.notify('已删除该生成范围。' if regions else '已删除最后一个生成范围，允许范围恢复为全图。')
 
     def _replace_regions(self,regions):
         self.rois=regions
@@ -1152,6 +1259,16 @@ class MainWindow(QMainWindow):
         regions=self.roi_regions()
         full = not regions
         ok,ng = self.ok_canvas,self.ng_canvas
+        for canvas in (ok,ng):
+            canvas.annotations = {}
+            if canvas.image is not None and (canvas == ok or self._has_full_ng()):
+                canvas.annotations = {f'roi-{index}': (self._roi_points(region, canvas.image.size), f'生成范围 {index+1}')
+                                      for index, region in enumerate(regions)}
+        if self.asset is not None and ng.image is not None:
+            points = (self.asset.provenance.get('source_polygon_xy', []) if self._has_full_ng()
+                      else self._roi_points((0,0,1,1), ng.image.size))
+            ng.annotations = {'asset': (points, '缺陷轮廓'), **ng.annotations}
+        ng.set_polygon_guide('asset', ng.annotations.get('asset', (None, ''))[0])
         for canvas in (ok,ng):
             for key in list(canvas.guides):
                 if key=='roi' or key.startswith('roi-'):
@@ -1217,6 +1334,12 @@ class MainWindow(QMainWindow):
         return self.worker is not None
 
     def _busy(self, busy, batch=False):
+        if busy:
+            focus = QApplication.focusWidget()
+            self._busy_focus = focus if focus is not None and self.isAncestorOf(focus) else None
+            # Keep focus within this tool before disabling its controls. Otherwise
+            # Qt falls back to the shell's first navigation button.
+            self.setFocus(Qt.FocusReason.OtherFocusReason)
         self.controls.setEnabled(not busy)
         self.save_btn.setEnabled(not busy)
         self.load_btn.setEnabled(not busy)
@@ -1231,6 +1354,13 @@ class MainWindow(QMainWindow):
         self.vt_xml_check.setEnabled(not busy)
         self.tabs.setEnabled(not busy)
         self.cancel_btn.setEnabled(busy and batch)
+        if not busy:
+            focus = self._busy_focus
+            if focus is not None and isValid(focus) and focus.isEnabled() and focus.isVisible():
+                focus.setFocus(Qt.FocusReason.OtherFocusReason)
+            else:
+                self.preview_btn.setFocus(Qt.FocusReason.OtherFocusReason)
+            self._busy_focus = None
 
     def _start(self, operation, on_result, batch=False):
         self._busy(True, batch)

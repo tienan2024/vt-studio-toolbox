@@ -102,7 +102,7 @@ for _token,_asset in [('__CHEVRON__','chevron-down.svg'),('__PLUS__','plus.svg')
 
 CAMERA_POPUP = """
 QListView { background: #ffffff; color: #263548; border: 1px solid #c8d1dd; border-radius: 7px; padding: 5px; outline: 0; }
-QListView::item { min-height: 32px; padding: 6px 10px; border-radius: 4px; }
+QListView::item { min-height: 32px; padding: 6px 10px; border-radius: 0; border-bottom: 1px solid #e2e7ed; }
 QListView::item:hover { background: #edf1f6; }
 QListView::item:selected { background: #fff0e4; color: #78360e; }
 """
