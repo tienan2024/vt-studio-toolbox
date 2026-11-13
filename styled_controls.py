@@ -10,6 +10,37 @@ _fusion=None
 _types=(QComboBox,QSpinBox,QDoubleSpinBox,QLineEdit)
 
 
+class PopupLayout(QObject):
+    """Qt caches native row positions before inherited QSS has settled."""
+    def eventFilter(self,obj,event):
+        if event.type()==QEvent.Type.Show:
+            obj.doItemsLayout()
+            # QComboBox may adjust its popup once more after the Show event.
+            QTimer.singleShot(0,self.relayout)
+        return False
+
+    def relayout(self):
+        if not isValid(self):return
+        view=self.parent()
+        if not isValid(view):return
+        view.doItemsLayout()
+        if not view.property('vtDefaultPopup'):return
+        popup=view.window();combo=popup.parentWidget()
+        if not isinstance(combo,QComboBox) or not popup.isVisible():return
+        # Compact combos also give Qt a smaller initial popup-height estimate.
+        # Fit the settled rows while retaining screen bounds and real scrolling.
+        count=min(combo.count(),combo.maxVisibleItems())
+        needed=sum(view.sizeHintForRow(i) for i in range(count))
+        extra=needed-view.viewport().height()
+        if extra>0:
+            available=popup.screen().availableGeometry()
+            height=min(popup.height()+extra,available.height())
+            top=max(available.top(),min(popup.y(),available.bottom()-height+1))
+            popup.resize(popup.width(),height);popup.move(popup.x(),top)
+            if popup.layout():popup.layout().activate()
+            view.doItemsLayout()
+
+
 def _inside(widget,kind):
     parent=widget.parentWidget()
     while parent is not None:
@@ -32,9 +63,12 @@ def style_control(widget):
             widget.setMaxVisibleItems(8)
             view=widget.view()
             if view.metaObject().className()=='QComboBoxListView' and view.itemDelegate().metaObject().className() in ('QComboBoxDelegate','QComboMenuDelegate'):
-                view=QListView();widget.setView(view)
+                view=QListView();view.setProperty('vtDefaultPopup',True);widget.setView(view)
             view.setStyleSheet(SHARED_POPUP)
-            if isinstance(view,QListView):view.setSpacing(2)
+            # QComboBox's popup height sums item heights, not QListView spacing.
+            if isinstance(view,QListView):view.setSpacing(0)
+            if not hasattr(view,'_vt_popup_layout'):
+                view._vt_popup_layout=PopupLayout(view);view.installEventFilter(view._vt_popup_layout)
             view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
             popup=view.window();popup.setObjectName('ToolboxPopup')
             popup.setStyleSheet('QWidget#ToolboxPopup { background:#ffffff; color:#263548; border:0; }')

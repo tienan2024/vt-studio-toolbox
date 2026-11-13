@@ -17,7 +17,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 from vt_xml import write_vt_xml
 
-VERSION = "7.5.0"
+VERSION = "7.5.1"
 MAX_ROI_REGIONS = 64
 MAX_TOTAL_SAMPLES = 100_000
 SCHEMA = "vt-defect-lab/1"

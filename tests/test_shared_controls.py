@@ -2,7 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from PySide6.QtWidgets import QApplication,QComboBox,QStyledItemDelegate,QListView,QLineEdit
+from PySide6.QtWidgets import QApplication,QComboBox,QStyledItemDelegate,QListView,QLineEdit,QTableWidget
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from toolbox import ToolboxWindow
@@ -49,6 +49,25 @@ class SharedControlTests(unittest.TestCase):
             combo=next_window.camera.controls['kind'];combo.showPopup();self.app.processEvents()
             self.assertTrue(combo.view().isVisible());combo.hidePopup()
         finally:next_window.close();self.app.processEvents()
+
+    def test_compact_table_popup_rows_match_paint_and_mouse_selection(self):
+        window=ToolboxWindow();window.show();window.select_page(3)
+        try:
+            combo=window.camera.controls['optics_method']
+            original=[combo.itemData(i) for i in range(combo.count())]
+            for _ in range(3):
+                combo.showPopup()
+                for _ in range(4):self.app.processEvents()
+                view=combo.view();rects=[view.visualRect(combo.model().index(i,0)) for i in range(combo.count())]
+                self.assertGreaterEqual(rects[1].top(),rects[0].bottom()+1)
+                self.assertGreaterEqual(rects[0].height(),32)
+                self.assertEqual(view.indexAt(rects[1].center()).row(),1)
+                self.assertLess(rects[-1].bottom(),view.viewport().height())
+                self.assertEqual(view.verticalScrollBar().maximum(),0)
+                QTest.mouseClick(view.viewport(),Qt.MouseButton.LeftButton,pos=rects[1].center());self.app.processEvents()
+                self.assertEqual(combo.currentData(),'thin_lens')
+            self.assertEqual(original,[combo.itemData(i) for i in range(combo.count())])
+        finally:window.close();self.app.processEvents()
 
 
 if __name__=='__main__':unittest.main()
