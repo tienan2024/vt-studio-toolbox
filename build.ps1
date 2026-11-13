@@ -35,7 +35,8 @@ if (-not $vtReport.sol_apply_adapter_available -or -not $vtReport.camera_page -o
     -not $vtReport.camera_area_plan -or -not $vtReport.camera_write_guard -or -not $vtReport.camera_simple_default -or
     -not $vtReport.camera_background_margins -or -not $vtReport.camera_optical_estimate -or
     -not $vtReport.camera_styled_controls -or -not $vtReport.shared_controls_four_pages -or
-    -not $vtReport.camera_independent_height -or -not $vtReport.camera_single_frame) { throw "SOL自动应用资源或相机页诊断失败。" }
+    -not $vtReport.camera_independent_height -or -not $vtReport.camera_single_frame -or
+    -not $vtReport.camera_mvs_tabs -or -not $vtReport.camera_inverse_optics -or -not $vtReport.camera_enum_language) { throw "SOL自动应用资源或相机页诊断失败。" }
 if ($vtCheck.ExitCode -ne 0 -or $vtReport.status -ne 'passed' -or -not $vtReport.frozen -or
     $vtReport.rgb_preview_mode -ne 'RGB' -or $vtReport.rgb_bmp_bits -ne 24 -or
     -not $vtReport.rgb_mask_matches_changed_pixels -or -not $vtReport.rgb_recipe_restored -or

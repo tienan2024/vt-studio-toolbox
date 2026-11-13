@@ -1,4 +1,4 @@
-# VT STUDIO 图像工具箱 · 7.2.0
+# VT STUDIO 图像工具箱 · 7.3.0
 
 最后更新：2026-11-13
 
@@ -8,9 +8,9 @@
 
 ## 打开工具
 
-GitHub仓库：[tienan2024/vt-studio-toolbox](https://github.com/tienan2024/vt-studio-toolbox)。6.5使用矩形XML；7.2.0包含多边形XML、脚本生成/测试、SOL应用和相机参数，发布版本以Release版本号为准。直接使用请从 [Releases](https://github.com/tienan2024/vt-studio-toolbox/releases) 下载Windows便携包，解压后运行VTStudioToolbox.exe；VTStudioCLI.exe供AI与脚本调用。源码仓库包含必要的原转换核心，不包含Python环境、生产图片、本机验证目录或构建产物。
+GitHub仓库：[tienan2024/vt-studio-toolbox](https://github.com/tienan2024/vt-studio-toolbox)。6.5使用矩形XML；7.3.0包含多边形XML、脚本生成/测试、SOL应用和相机参数，发布版本以Release版本号为准。直接使用请从 [Releases](https://github.com/tienan2024/vt-studio-toolbox/releases) 下载Windows便携包，解压后运行VTStudioToolbox.exe；VTStudioCLI.exe供AI与脚本调用。源码仓库包含必要的原转换核心，不包含Python环境、生产图片、本机验证目录或构建产物。
 
-优先双击桌面“VT STUDIO 工具箱”快捷方式。7.2.0独立包位于 `D:/CodexBuilds/vt-studio-toolbox/7.2.0/VTStudioToolbox/VTStudioToolbox.exe`（源码的release/7.2.0入口通过目录联接保留），启动脚本优先打开新版，旧窗口和旧包保留。便携版需保留整个文件夹及_internal，不能只复制EXE。
+优先双击桌面“VT STUDIO 工具箱”快捷方式。7.3.0独立包位于 `D:/CodexBuilds/vt-studio-toolbox/7.3.0/VTStudioToolbox/VTStudioToolbox.exe`（源码的release/7.3.0入口通过目录联接保留），启动脚本优先打开新版，旧窗口和旧包保留。便携版需保留整个文件夹及_internal，不能只复制EXE。
 
 源码启动：
 
@@ -33,7 +33,9 @@ python app.py
 
 ## 相机参数
 
-7.2按一帧一个产品配置：帧触发开始，按外部行触发采满Height后结束本帧。日常填写产品宽长、左右总留边、前后总留白，调整曝光、Gain和HB；工位标定、固定编码器/倍分频和接线收在高级设置。无需产品间距，Y精度支持已知值、产品长度/实测行数标定或明确标注的方形像素规划。相位仍由下位机调整，软件不会将留白数值冒充已执行的相位动作。旧相机配置可迁移，但线扫Y来源需确认后才可写入。四个工作区共用细箭头下拉列表、数字输入、焦点/禁用态及紧凑表格编辑样式。
+7.3参考MVS属性面板：左上选择2K线扫、4K线扫或500万面阵，下方为“产品参数、采集触发、数字IO”三页。产品参数按表格填写宽长、焦距、像元及留白，可用工作距离计算精度，也可用目标精度反算工作距离。参考型号的像元可修改，镜头估算需实测校准。线扫显示帧/行两个IO选择，面阵只显示帧触发；布尔项用复选框，输出信号源按枚举选择，支持中文/English显示切换，设备读取后更新支持项。工位Y标定、编码器/倍分频及曝光/Gain/HB/ROI收在更多参数。
+
+一帧一个产品，线扫按外部行触发采满Height后结束本帧，无需产品间距。线扫Y精度支持已知值、产品长度/实测行数标定或明确标注的方形像素规划；下位机负责相位。旧相机配置可迁移，旧线扫Y来源需确认后才可写入。四个工作区共用细箭头下拉列表、数字输入、焦点/禁用态及紧凑表格编辑样式。
 
 枚举相机 → 读取设备尺寸 → 对比相机参数 → 查看具体差异 → 写入并保存UserSet1。改变目标/配置后必须重新对比。设备节点缺失、类型/枚举/范围不符会阻止写入；用户集保存前后分别读回。纯计算无需MVS，设备操作依赖本机MVS x64 SDK，支持GigE/USB3。当前本机枚举0台，实际成像及用户集断电保持尚待实机验证。详见[相机参数](docs/13-相机参数.md)。
 

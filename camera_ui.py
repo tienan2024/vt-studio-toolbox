@@ -12,6 +12,7 @@ from styled_controls import make_combo
 from camera_model import CameraSettings,CameraError,calculate,config_dict,settings_from_dict,import_mfs_text,fingerprint
 from camera_sdk import discover_mvs,enumerate_cameras
 from camera_transaction import inspect_camera,preview_camera,write_camera
+from camera_options import PRESETS,FIELD_LABELS,LABELS,option_label
 
 
 class CameraJob(QThread):
@@ -49,48 +50,90 @@ class FramePreview(QWidget):
         p.end()
 
 
+class PropertyForm:
+    """MVS-style parameter/value/unit grid, retaining real typed Qt editors."""
+    def __init__(self,page,title):
+        self.table=page.table(['参数','设置值','单位']);self.rows={}
+        self.table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Fixed);self.table.setColumnWidth(0,126)
+        self.table.horizontalHeader().setSectionResizeMode(2,QHeaderView.ResizeMode.Fixed);self.table.setColumnWidth(2,70)
+        widget=QWidget();layout=QVBoxLayout(widget);layout.setContentsMargins(8,10,8,10);layout.addWidget(self.table);layout.addStretch()
+        scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(widget)
+        page.form_tabs.addTab(scroll,title);page.property_forms.append(self)
+
+    def addRow(self,caption,widget=None):
+        row=self.table.rowCount();self.table.insertRow(row);self.table.setRowHeight(row,36)
+        if widget is None:
+            if isinstance(caption,QCheckBox):
+                widget=caption;caption=QLabel(widget.text());widget.setText('')
+            else:
+                self.table.setSpan(row,0,1,3);self.table.setCellWidget(row,0,caption);self.table.setRowHeight(row,54);self.fit();return
+        text=caption.text();name,_,unit=text.partition(' / ');caption.setText(name)
+        self.table.setCellWidget(row,0,caption);self.table.setCellWidget(row,1,widget)
+        self.table.setItem(row,2,QTableWidgetItem(unit));self.rows[widget]=row;self.fit()
+        return caption
+
+    def setRowVisible(self,widget,visible):
+        self.table.setRowHidden(self.rows[widget],not visible);self.fit()
+
+    def fit(self):
+        self.table.setFixedHeight(max(30,self.table.horizontalHeader().sizeHint().height())+sum(self.table.rowHeight(i) for i in range(self.table.rowCount()) if not self.table.isRowHidden(i))+4)
+
+
 class CameraPage(QWidget):
     def __init__(self):
         super().__init__();self.setObjectName('CameraPage')
         self.worker=None;self.preview=None;self.last_report=None;self.geometry=None;self.plan=None;self._loading=False
-        self.controls={};self.labels={};self.sdk=discover_mvs();root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(10)
+        self.controls={};self.labels={};self.field_forms={};self.field_titles={};self.property_forms=[];self.language='zh';self.output_caps={}
+        self.sdk=discover_mvs();root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(10)
         tools=QHBoxLayout();tools.addStretch()
+        self.language_box=self.styled_combo();self.language_box.addItem('中文','zh');self.language_box.addItem('English','en')
+        self.language_box.setFixedWidth(136);tools.addWidget(self.language_box)
         self.connection_button=self.button('连接与写入相机',lambda:None,tools);self.connection_button.setCheckable(True)
-        more=self.button('配置与文件',lambda:None,tools);self.files_button=more;menu=QMenu(more)
+        self.files_button=self.button('配置与文件',lambda:None,tools);menu=QMenu(self.files_button)
         for title,action in [('打开配置',self.open_config),('保存配置',self.save_config),('读取 MFS',self.open_mfs),('设置 MVS 目录',self.choose_sdk)]:menu.addAction(title,action)
-        more.setMenu(menu);root.addLayout(tools)
+        self.files_button.setMenu(menu);root.addLayout(tools)
         self.devices_bar=QWidget();bar=QHBoxLayout(self.devices_bar);bar.setContentsMargins(0,0,0,0)
         self.device=self.styled_combo();self.device.addItem('尚未枚举相机',None);bar.addWidget(self.device,1)
         self.scan_button=self.button('枚举相机',lambda:self.start_job('scan'),bar)
         self.inspect_button=self.button('读取设备尺寸',lambda:self.start_job('inspect'),bar)
         root.addWidget(self.devices_bar);self.devices_bar.hide()
         split=QSplitter(Qt.Orientation.Horizontal);root.addWidget(split,1)
-        self.form_panel=QWidget();left=QVBoxLayout(self.form_panel);left.setContentsMargins(0,0,10,0);left.setSpacing(10)
+        self.form_panel=QWidget();left=QVBoxLayout(self.form_panel);left.setContentsMargins(0,0,10,0);left.setSpacing(8)
+        self.camera_type=self.styled_combo()
+        for key,preset in PRESETS.items():self.camera_type.addItem(preset['zh'],key)
+        left.addWidget(self.camera_type);self.camera_info=QLabel();self.camera_info.setObjectName('Subtle');self.camera_info.setWordWrap(True);left.addWidget(self.camera_info)
         self.form_tabs=QTabWidget();left.addWidget(self.form_tabs,1)
-        station=self.form_tab('产品画面');calibration=self.form_tab('工位标定');encoder=self.form_tab('编码器');image=self.form_tab('成像');io=self.form_tab('接线')
-        self.combo(station,'kind','相机类型',[('线扫','line'),('面阵','area')])
+        station=PropertyForm(self,'产品参数');self.parameter_table=station.table
+        trigger=self.form_tab('采集触发');io=PropertyForm(self,'数字 IO');self.io_table=io.table
+        calibration=self.form_tab('工位标定');encoder=self.form_tab('编码器');image=self.form_tab('成像')
+        self.basic_tab_count=3
         self.number(station,'target_width_mm','产品宽度 / mm',.001,100000,3)
         self.number(station,'target_length_mm','产品长度 / mm',.001,100000,3)
+        self.optical_mode=self.styled_combo()
+        for value in ('wd_to_precision','precision_to_wd'):self.optical_mode.addItem(option_label(value),value)
+        self.optical_mode_label=QLabel('计算方向');station.addRow(self.optical_mode_label,self.optical_mode)
+        self.number(station,'working_distance_mm','工作距离 / mm',.001,100000,3)
+        self.number(station,'focal_length_mm','镜头焦距 / mm',0,1000,3,special='请填写')
+        self.number(station,'pixel_pitch_um','像元尺寸 / μm',0,1000,3,special='请填写')
+        self.number(station,'x_mm_per_px','横向精度 / mm/px',.000001,1000,6)
+        self.controls['x_mm_per_px'].setToolTip('线扫为横向光学精度；纵向由工位Y标定决定。镜头参数为近似估算。')
         self.number(station,'image_horizontal_margin_mm','左右总留边 / mm',0,100000,3)
         self.number(station,'image_vertical_margin_mm','前后总留白 / mm',0,100000,3)
-        self.number(station,'exposure_us','曝光 / μs',.01,100000000,3)
-        self.number(station,'gain','增益 Gain',0,10000,4)
-        self.combo(station,'compression','HB 压缩',[('保持现状',''),('关闭 Off','Off'),('HB','HB')])
-        self.note(station,'帧触发开始采集，采满 Height 行结束。前后留白的位置由下位机相位调整。')
-        self.combo(calibration,'precision_source','X 精度来源',[('实测视野','fov'),('已知像素精度','precision'),('镜头参数估算','optics')])
+        self.frame_trigger_group=self.trigger_group(trigger,'frame_line','帧触发','Line3')
+        self.line_trigger_group=self.trigger_group(trigger,'encoder_line','行触发','Line1')
+        self.trigger_help=QLabel();self.trigger_help.setWordWrap(True);self.trigger_help.setObjectName('Subtle');trigger.addRow(self.trigger_help)
+        self.combo(calibration,'kind','相机类型',[('线扫','line'),('面阵','area')])
+        self.combo(calibration,'precision_source','精度来源',[('实测视野','fov'),('已知精度','precision'),('镜头估算','optics')])
+        self.combo(calibration,'optics_direction','计算方向',[('工作距离 → 精度','wd_to_precision'),('精度 → 工作距离','precision_to_wd')])
         self.integer(calibration,'sensor_width','传感器宽度 / px',1,65536)
         self.integer(calibration,'sensor_height','传感器高度 / px',1,65536)
-        self.number(calibration,'working_distance_mm','工作距离 / mm',.001,100000,3)
-        self.number(calibration,'focal_length_mm','镜头焦距 / mm',0,1000,3,special='请填写')
-        self.number(calibration,'pixel_pitch_um','传感器像元 / μm',0,1000,3,special='请填写')
         self.number(calibration,'fov_width_mm','全幅 X 视野 / mm',.001,100000,3)
         self.number(calibration,'fov_height_mm','全幅 Y 视野 / mm',.001,100000,3)
-        self.number(calibration,'x_mm_per_px','X 精度 / mm/px',.000001,1000,6)
         self.combo(calibration,'line_y_source','线扫 Y 精度来源',[('已知纵向精度','precision'),('产品实测标定','calibration'),('方形像素规划','square')])
         self.number(calibration,'y_mm_per_px','Y 精度 / mm/行',.000001,1000,6)
         self.number(calibration,'calibration_length_mm','标定产品长度 / mm',.001,100000,3)
         self.integer(calibration,'calibration_rows','图中产品占用行数',1,1000000)
-        self.note(calibration,'标定使用未缩放的原始采集图。工位设置随配置保存，换产品时可复用；方形像素模式仅提供规划值。')
+        self.note(calibration,'线扫Y精度由行采样决定，可用未缩放产品图标定。镜头估算需用实测视野校准。')
         self.number(encoder,'products_per_minute','最高产能 / 片/分',.01,100000,2)
         self.integer(encoder,'ppr','编码器 P/R',1,10000000)
         self.combo(encoder,'edge_factor','实际计数倍率',[('×1',1),('×2',2),('×4',4)])
@@ -99,39 +142,41 @@ class CameraPage(QWidget):
         self.integer(encoder,'multiplier','倍频 Multiplier',1,1000000)
         self.integer(encoder,'post_divider','后分频 PostDivider',1,1000000)
         self.number(encoder,'rate_margin_percent','行频能力预留 / %',0,100,1)
-        self.note(encoder,'固定编码器与倍分频决定行触发节奏。图高独立设置；每周期总行节拍不等于产品在图中占用的行数。')
         self.combo(io,'frame_selector','帧触发选择器',[('FrameBurstStart','FrameBurstStart'),('FrameStart','FrameStart')])
-        lines=[('Line'+str(i),'Line'+str(i)) for i in range(16)]
-        self.combo(io,'frame_line','Z 相输入',lines);self.combo(io,'frame_edge','帧触发边沿',[('上升沿','RisingEdge'),('下降沿','FallingEdge')])
-        self.combo(io,'encoder_line','A 相输入',lines)
-        self.combo(io,'line_edge','行触发/信号对齐',[('下降沿','FallingEdge'),('上升沿','RisingEdge')])
-        self.combo(io,'input_format','输入电气格式',[('保持现状',''),('Differential','Differential')],editable=True)
+        self.combo(io,'frame_edge','帧触发边沿',[('上升沿','RisingEdge'),('下降沿','FallingEdge')])
+        self.combo(io,'line_edge','行触发边沿',[('下降沿','FallingEdge'),('上升沿','RisingEdge')])
+        self.combo(io,'input_format','输入电气格式',[('保持现状',''),('差分','Differential')],editable=False)
         self.integer(io,'a_debounce_ns','A 相消抖 / ns',0,100000000)
-        self.integer(io,'z_debounce_ns','Z 相消抖 / ns',0,100000000)
-        self.check(io,'output0_enabled','配置输出 IO 1');self.combo(io,'output0_line','输出 IO 1',lines)
-        self.text(io,'output0_source','输出 1 信号源')
-        self.check(io,'output4_enabled','配置输出 IO 2');self.combo(io,'output4_line','输出 IO 2',lines)
-        self.text(io,'output4_source','输出 2 信号源')
-        self.combo(io,'output_mode','输出模式',[('Strobe','Strobe'),('Output','Output')])
-        self.check(io,'strobe_enable','启用 StrobeEnable 节点')
-        self.integer(io,'strobe_duration_us','输出 2 频闪时长 / μs',0,100000000)
-        self.text(io,'device_name','相机名称 DeviceUserID')
-        self.note(io,'文档参考接线：Z→Line3，A→Line1；输出→Line0 / Line4。以现场接线和设备支持项为准。名称使用 ASCII。')
-        self.integer(image,'digital_shift','DigitalShift',-1,32,special='保持现状')
-        self.text(image,'preamp_gain','PreampGain（空=保持）')
-        self.combo(image,'pixel_format','像素格式',[('保持现状',''),('Mono8','Mono8'),('BayerRG8','BayerRG8'),('RGB8Packed','RGB8Packed'),('BGR8Packed','BGR8Packed')],editable=True)
-        self.check(image,'reverse_x','水平翻转 ReverseX')
+        self.integer(io,'z_debounce_ns','帧触发消抖 / ns',0,100000000)
+        lines=[('Line'+str(i),'Line'+str(i)) for i in range(5)]
+        self.check(io,'output0_enabled','启用输出 1');self.combo(io,'output0_line','输出 1 信号线',lines)
+        self.combo(io,'output0_source','输出 1 信号源',[(option_label(v),v) for v in ('ExposureStartActive','SoftTriggerActive')])
+        self.check(io,'output4_enabled','启用输出 2');self.combo(io,'output4_line','输出 2 信号线',lines)
+        self.combo(io,'output4_source','输出 2 信号源',[(option_label(v),v) for v in ('ExposureStartActive','SoftTriggerActive')])
+        self.combo(io,'output_mode','输出模式',[('频闪','Strobe'),('输出','Output')])
+        self.check(io,'strobe_enable','启用频闪')
+        self.integer(io,'strobe_duration_us','输出 2 脉宽 / μs',0,100000000)
+        self.text(image,'device_name','相机名称 DeviceUserID')
+        self.number(image,'exposure_us','曝光 / μs',.01,100000000,3)
+        self.number(image,'gain','增益 Gain',0,10000,4)
+        self.combo(image,'compression','HB 压缩',[('保持现状',''),('关闭','Off'),('HB','HB')])
+        self.integer(image,'digital_shift','数字位移',-1,32,special='保持现状')
+        self.text(image,'preamp_gain','前置增益（空=保持）')
+        self.combo(image,'pixel_format','像素格式',[('保持现状',''),('Mono8','Mono8'),('BayerRG8','BayerRG8'),('RGB8Packed','RGB8Packed'),('BGR8Packed','BGR8Packed')],editable=False)
+        self.check(image,'reverse_x','水平翻转')
         self.number(image,'black_level','黑电平（-1=保持）',-1,65535,2)
-        self.integer(image,'width_override','Width / px',0,65536,special='自动计算并对齐步长')
-        self.integer(image,'height_override','Height / px',0,1000000,special='自动计算并对齐步长')
-        self.check(image,'centered_x','X 方向居中');self.integer(image,'offset_x','OffsetX / px',0,65536)
+        self.integer(image,'width_override','Width / px',0,65536,special='自动计算')
+        self.integer(image,'height_override','Height / px',0,1000000,special='自动计算')
+        self.check(image,'centered_x','X 居中');self.integer(image,'offset_x','OffsetX / px',0,65536)
         self.integer(image,'offset_y','OffsetY / px',0,65536)
-        self.number(image,'line_rate_override','设置行频 / Hz',0,100000000,0,special='按产能与余量计算')
-        self.check(image,'limit_line_rate','启用 AcquisitionLineRateEnable')
+        self.number(image,'line_rate_override','手动行频 / Hz',0,100000000,0,special='按产能计算')
+        self.check(image,'limit_line_rate','启用手动行频')
         self.check(image,'require_square','要求方形像素');self.number(image,'square_tolerance_percent','X/Y 允许差异 / %',0,100,2)
-        self.note(image,'Gain、DigitalShift 与 PreampGain 分别设置；不把它们混为“数字增益”。选定非保持项时，设备必须支持该节点。')
-        self.advanced_button=self.button('展开高级设置',lambda:None,left);self.advanced_button.setCheckable(True);self.advanced_button.toggled.connect(self.toggle_advanced)
+        self.advanced_button=self.button('更多参数',lambda:None,left);self.advanced_button.setCheckable(True);self.advanced_button.toggled.connect(self.toggle_advanced)
         self.toggle_advanced(False)
+        self.camera_type.currentIndexChanged.connect(self.preset_changed)
+        self.optical_mode.currentIndexChanged.connect(self.optical_mode_changed)
+        self.language_box.currentIndexChanged.connect(self.language_changed)
         split.addWidget(self.form_panel)
         right=QWidget();right_layout=QVBoxLayout(right);right_layout.setContentsMargins(8,0,0,0);right_layout.setSpacing(10)
         title=QLabel('计算结果');title.setFixedHeight(28);title.setStyleSheet('font-size:18px;font-weight:600;');right_layout.addWidget(title)
@@ -148,13 +193,13 @@ class CameraPage(QWidget):
         self.export_button=self.button('保存记录',self.export_report,actions);actions.addStretch()
         self.write_button=self.button('写入并保存 UserSet1',self.start_write,actions);self.write_button.setObjectName('Primary');right_layout.addWidget(self.device_actions);self.device_actions.hide()
         self.connection_button.toggled.connect(self.toggle_connection)
-        split.addWidget(right);split.setStretchFactor(0,0);split.setStretchFactor(1,1);split.setSizes([430,730])
-        self.form_panel.setMinimumWidth(390)
+        split.addWidget(right);split.setStretchFactor(0,0);split.setStretchFactor(1,1);split.setSizes([455,705])
+        self.form_panel.setMinimumWidth(450)
         self.progress=QProgressBar();self.progress.setFixedHeight(5);self.progress.setTextVisible(False);self.progress.hide();root.addWidget(self.progress)
         self.message=QLabel();self.message.setObjectName('Message');self.message.setWordWrap(True);self.message.setTextFormat(Qt.TextFormat.PlainText);root.addWidget(self.message)
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.timeout.connect(self.recalculate)
         self.device.currentIndexChanged.connect(self.device_changed)
-        self.load_settings(CameraSettings());self.notify('当前为示例参数，请按实际工位修改。')
+        self.load_settings(CameraSettings(precision_source='optics',focal_length_mm=25,pixel_pitch_um=7));self.notify('镜头与工位参数为示例，请按实际设备调整。')
 
     @staticmethod
     def button(text,slot,layout):
@@ -175,7 +220,8 @@ class CameraPage(QWidget):
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(widget);self.form_tabs.addTab(scroll,title);return form
 
     def register(self,form,key,label,widget):
-        self.controls[key]=widget;caption=QLabel(label);caption.setWordWrap(True);self.labels[key]=caption;form.addRow(caption,widget)
+        self.controls[key]=widget;self.field_forms[key]=form;self.field_titles[key]=label
+        caption=QLabel(label);caption.setWordWrap(True);self.labels[key]=caption;form.addRow(caption,widget)
         return widget
 
     def number(self,form,key,label,low,high,decimals,special=None):
@@ -202,14 +248,104 @@ class CameraPage(QWidget):
         widget=QLineEdit();self.register(form,key,label,widget);widget.textChanged.connect(self.changed)
 
     def check(self,form,key,label):
-        widget=QCheckBox(label);widget.setMinimumHeight(28);self.controls[key]=widget;form.addRow(widget);widget.toggled.connect(self.changed)
+        widget=QCheckBox(label);widget.setMinimumHeight(28);self.controls[key]=widget;self.field_forms[key]=form;self.field_titles[key]=label
+        caption=form.addRow(widget)
+        if isinstance(caption,QLabel):self.labels[key]=caption
+        widget.toggled.connect(self.changed)
+
+    def trigger_group(self,form,key,title,default):
+        group=QWidget();layout=QVBoxLayout(group);layout.setContentsMargins(0,6,0,10);layout.setSpacing(8)
+        label=QLabel(title);label.setStyleSheet('font-weight:600;');layout.addWidget(label)
+        choice=self.styled_combo()
+        for i in range(5):choice.addItem('Line'+str(i),'Line'+str(i))
+        choice.setCurrentIndex(choice.findData(default));layout.addWidget(choice);choice.currentIndexChanged.connect(self.changed)
+        self.controls[key]=choice;self.labels[key]=label;self.field_titles[key]=title
+        form.addRow(group);return group
+
+    def preset_changed(self,*args):
+        if self._loading:return
+        preset=PRESETS.get(self.camera_type.currentData())
+        if not preset:return
+        s=self.settings(validate=False)
+        for key in ('kind','sensor_width','sensor_height','pixel_pitch_um'):setattr(s,key,preset[key])
+        s.width_override=s.height_override=0;s.centered_x=True;s.offset_x=s.offset_y=0
+        s.frame_selector='FrameBurstStart' if s.kind=='line' else 'FrameStart'
+        s.frame_line='Line3' if s.kind=='line' else 'Line0';s.frame_edge='RisingEdge'
+        if s.kind=='line':
+            s.encoder_line='Line1';s.line_edge='FallingEdge';s.input_format='Differential'
+            s.a_debounce_ns=300;s.z_debounce_ns=1000;s.pre_divider=1;s.multiplier=3;s.post_divider=1
+            s.output0_enabled=True;s.output0_line='Line0';s.output0_source='ExposureStartActive'
+            s.output4_enabled=False;s.output4_line='Line4';s.output4_source='SoftTriggerActive'
+        else:
+            s.input_format='';s.output0_enabled=False;s.output4_enabled=False;s.pixel_format='';s.compression=''
+        self.geometry=None;self.output_caps={};self.load_settings(s)
+
+    def sync_preset(self):
+        kind=self.controls['kind'].currentData();width=self.controls['sensor_width'].value();height=self.controls['sensor_height'].value()
+        key=next((name for name,p in PRESETS.items() if p['kind']==kind and p['sensor_width']==width and (kind=='line' or p['sensor_height']==height)),'custom')
+        if self.camera_type.findData(key)<0:self.camera_type.addItem(option_label(key,self.language),key)
+        previous=self.camera_type.blockSignals(True);self.camera_type.setCurrentIndex(self.camera_type.findData(key));self.camera_type.blockSignals(previous)
+        preset=PRESETS.get(key);spec=str(width)+(' × '+str(height) if kind=='area' else '')+' px'
+        self.camera_info.setText(spec+' · '+(('Reference ' if self.language=='en' else '参考 ')+preset['model'] if preset else ('Device readback' if self.language=='en' else '按设备读回')))
+
+    def optical_mode_changed(self,*args):
+        if self._loading:return
+        value=self.optical_mode.currentData();self._loading=True
+        source=value if value in ('fov','precision') else 'optics'
+        self.controls['precision_source'].setCurrentIndex(self.controls['precision_source'].findData(source))
+        if source=='optics':self.controls['optics_direction'].setCurrentIndex(self.controls['optics_direction'].findData(value))
+        self._loading=False;self.changed()
+
+    def language_changed(self,*args):
+        self.language=self.language_box.currentData() or 'zh';self.translate_options();self.enable_fields()
+
+    def translate_options(self):
+        en=self.language=='en'
+        for key,label in self.labels.items():
+            original=self.field_titles.get(key,label.text());is_table=isinstance(self.field_forms.get(key),PropertyForm)
+            name,_,unit=original.partition(' / ')
+            text=FIELD_LABELS.get(key,key.replace('_',' ').title()) if en else (name if is_table else original)
+            if en and unit and not is_table:text+=' / '+unit.replace('片/分','parts/min').replace('行','line')
+            label.setText(text)
+        for key,widget in self.controls.items():
+            if isinstance(widget,QCheckBox) and key not in self.labels:widget.setText(FIELD_LABELS.get(key,key.replace('_',' ').title()) if en else self.field_titles[key])
+        for widget in [self.camera_type,self.optical_mode,*[w for w in self.controls.values() if isinstance(w,QComboBox)]]:
+            blocked=widget.blockSignals(True)
+            for i in range(widget.count()):
+                value=widget.itemData(i)
+                if value in LABELS or value in PRESETS:widget.setItemText(i,option_label(value,self.language))
+            widget.blockSignals(blocked)
+        names=['Product','Trigger','Digital IO','Calibration','Encoder','Imaging'] if en else ['产品参数','采集触发','数字 IO','工位标定','编码器','成像']
+        for i,name in enumerate(names):self.form_tabs.setTabText(i,name)
+        self.optical_mode_label.setText('Calculate' if en else '计算方向')
+        for form in self.property_forms:form.table.setHorizontalHeaderLabels(['Parameter','Value','Unit'] if en else ['参数','设置值','单位'])
+        self.sync_preset();self.refresh_output_choices()
+
+    def refresh_output_choices(self):
+        for prefix in ('output0','output4'):
+            widget=self.controls[prefix+'_source'];current=widget.currentData();line=self.controls[prefix+'_line'].currentData()
+            cap=self.output_caps.get(line,{})
+            choices=cap.get('choices',[]) if cap.get('status')=='readable' else ['ExposureStartActive','SoftTriggerActive']
+            choices=list(dict.fromkeys([*choices,*([current] if current is not None else [])]))
+            blocked=widget.blockSignals(True);widget.clear()
+            for value in choices:widget.addItem(option_label(value,self.language),value)
+            widget.setCurrentIndex(widget.findData(current));widget.blockSignals(blocked)
+            widget.setToolTip(('Read from camera' if self.language=='en' else '已从相机读取支持的枚举') if cap.get('status')=='readable' else ('Reference values; confirm on device' if self.language=='en' else '参考配置选项；连接后按设备能力核对'))
+            if cap.get('status')=='readable' and current not in cap.get('choices',[]):
+                widget.setToolTip('Configured value is not supported; select a device option.' if self.language=='en' else '当前配置值不在设备支持列表中，请选择设备选项。')
+
+    def apply_enum_choices(self,key,choices):
+        if not choices:return
+        widget=self.controls[key];current=widget.currentData();blocked=widget.blockSignals(True);widget.clear()
+        for value in dict.fromkeys([*choices,*([current] if current is not None else [])]):widget.addItem(option_label(value,self.language),value)
+        widget.setCurrentIndex(widget.findData(current));widget.blockSignals(blocked)
 
     @staticmethod
     def note(form,text):
         label=QLabel(text);label.setWordWrap(True);label.setObjectName('Subtle');form.addRow(label)
 
     def load_settings(self,settings):
-        settings.validate();self._loading=True
+        self._loading=True
         for key,value in asdict(settings).items():
             widget=self.controls[key]
             if isinstance(widget,QCheckBox):widget.setChecked(value)
@@ -219,9 +355,12 @@ class CameraPage(QWidget):
                 widget.setCurrentIndex(index)
             elif isinstance(widget,QLineEdit):widget.setText(value)
             else:widget.setValue(value)
-        self._loading=False;self.recalculate()
+        source=settings.precision_source;mode=settings.optics_direction if source=='optics' else source
+        if self.optical_mode.findData(mode)<0:self.optical_mode.addItem(option_label(mode,self.language),mode)
+        self.optical_mode.setCurrentIndex(self.optical_mode.findData(mode))
+        self._loading=False;self.translate_options();self.recalculate()
 
-    def settings(self):
+    def settings(self,validate=True):
         values={}
         for key,widget in self.controls.items():
             if isinstance(widget,QCheckBox):value=widget.isChecked()
@@ -229,7 +368,8 @@ class CameraPage(QWidget):
             elif isinstance(widget,QLineEdit):value=widget.text().strip()
             else:value=widget.value()
             values[key]=value
-        return CameraSettings(**values).validate()
+        result=CameraSettings(**values)
+        return result.validate() if validate else result
 
     def changed(self,*args):
         if self._loading:return
@@ -238,30 +378,39 @@ class CameraPage(QWidget):
     def enable_fields(self):
         line=self.controls['kind'].currentData()=='line';source=self.controls['precision_source'].currentData();fov=source=='fov';optics=source=='optics'
         line_only=('ppr','edge_factor','encoder_revs','pre_divider','multiplier','post_divider','rate_margin_percent',
-                   'encoder_line','line_edge','a_debounce_ns','line_rate_override','limit_line_rate','line_y_source')
-        for key in line_only:self.controls[key].setEnabled(line)
+                   'line_edge','a_debounce_ns','line_rate_override','limit_line_rate','line_y_source')
+        for key in line_only:
+            self.controls[key].setEnabled(line);self.field_forms[key].setRowVisible(self.controls[key],line)
+        self.line_trigger_group.setVisible(line);self.controls['encoder_line'].setEnabled(line)
         self.controls['sensor_height'].setEnabled(not line);self.controls['offset_y'].setEnabled(not line)
         self.controls['fov_width_mm'].setEnabled(fov);self.controls['fov_height_mm'].setEnabled(fov and not line)
         ysource=self.controls['line_y_source'].currentData()
         y_visible=(line and ysource in ('precision','legacy')) or (not line and source=='precision')
-        self.controls['x_mm_per_px'].setEnabled(source=='precision');self.controls['y_mm_per_px'].setEnabled(y_visible)
+        inverse=self.controls['optics_direction'].currentData()=='precision_to_wd'
+        self.controls['x_mm_per_px'].setEnabled(source=='precision' or (optics and inverse));self.controls['y_mm_per_px'].setEnabled(y_visible)
+        self.controls['working_distance_mm'].setEnabled(optics and not inverse)
+        self.controls['focal_length_mm'].setEnabled(optics);self.controls['pixel_pitch_um'].setEnabled(optics)
         self.controls['line_rate_override'].setEnabled(line and self.controls['limit_line_rate'].isChecked())
         for key,visible in {'sensor_height':not line,'fov_width_mm':fov,'fov_height_mm':fov and not line,
-                            'x_mm_per_px':source=='precision','y_mm_per_px':y_visible,'line_y_source':line,
+                            'y_mm_per_px':y_visible,'line_y_source':line,
                             'calibration_length_mm':line and ysource=='calibration','calibration_rows':line and ysource=='calibration',
-                            'working_distance_mm':optics,'focal_length_mm':optics,'pixel_pitch_um':optics}.items():
-            widget=self.controls[key];form=widget.parentWidget().layout();form.setRowVisible(widget,visible)
+                            'kind':False,'precision_source':False,'optics_direction':False,'frame_selector':False}.items():
+            self.field_forms[key].setRowVisible(self.controls[key],visible)
         self.controls['offset_x'].setEnabled(not self.controls['centered_x'].isChecked())
         for prefix in ('output0','output4'):
             for suffix in ('line','source'):self.controls[prefix+'_'+suffix].setEnabled(self.controls[prefix+'_enabled'].isChecked())
         self.controls['strobe_duration_us'].setEnabled(self.controls['output4_enabled'].isChecked())
+        self.trigger_help.setText(('Frame trigger only. Default input: Line0.' if self.language=='en' else '面阵仅使用帧触发；默认 Line0，可按实际接线选择。') if not line else ('Frame: Line3. Line: Line1 via encoder and frequency converter.' if self.language=='en' else '参考规范：帧触发 Line3，行触发 Line1，经编码器与 1/3/1 变频链。'))
+        self.sync_preset();self.refresh_output_choices()
+        self.form_tabs.setTabVisible(4,line and self.advanced_button.isChecked())
 
     def toggle_advanced(self,expanded):
-        self.form_tabs.setCurrentIndex(0)
-        for i in range(1,self.form_tabs.count()):self.form_tabs.setTabVisible(i,expanded)
-        self.form_tabs.tabBar().setVisible(expanded)
-        self.advanced_button.setText('收起高级设置' if expanded else '展开高级设置')
-        if expanded:self.form_tabs.setCurrentIndex(1)
+        if not expanded and self.form_tabs.currentIndex()>=self.basic_tab_count:self.form_tabs.setCurrentIndex(0)
+        for i in range(self.basic_tab_count,self.form_tabs.count()):self.form_tabs.setTabVisible(i,expanded)
+        if self.controls['kind'].currentData()=='area':self.form_tabs.setTabVisible(4,False)
+        self.form_tabs.tabBar().show()
+        self.advanced_button.setText(('Less' if expanded else 'More settings') if self.language=='en' else ('收起更多' if expanded else '更多参数'))
+        if expanded:self.form_tabs.setCurrentIndex(self.basic_tab_count)
 
     def toggle_details(self,expanded):
         self.tabs.setVisible(expanded);self.frame_preview.setVisible(not expanded)
@@ -277,6 +426,7 @@ class CameraPage(QWidget):
     def fit_metrics(self):
         header=self.metrics.horizontalHeader();header.ensurePolished()
         self.metrics.setFixedHeight(max(header.height(),header.sizeHint().height())+sum(self.metrics.rowHeight(i) for i in range(self.metrics.rowCount()))+2*self.metrics.frameWidth()+4)
+        for form in self.property_forms:form.fit()
 
     @staticmethod
     def fill(table,rows):
@@ -309,7 +459,14 @@ class CameraPage(QWidget):
         self.timer.stop();self.preview=None;self.write_button.setEnabled(False)
         try:
             self.enable_fields();limits=self.geometry.get('limits') if self.geometry else None
-            self.render_plan(calculate(self.settings(),limits));self.update_actions()
+            plan=calculate(self.settings(),limits)
+            if plan['settings']['precision_source']=='optics':
+                key='working_distance_mm' if plan['settings']['optics_direction']=='precision_to_wd' else 'x_mm_per_px'
+                value=plan['metrics'][key];widget=self.controls[key]
+                if not widget.minimum()<=value<=widget.maximum():raise CameraError('计算结果超出输入控件范围，请调整镜头或目标精度。')
+                blocked=widget.blockSignals(True);widget.setValue(value);widget.blockSignals(blocked)
+                plan=calculate(self.settings(),limits)
+            self.render_plan(plan);self.update_actions()
             self.notify('；'.join(self.plan['blocking']) if self.plan['blocking'] else '',bool(self.plan['blocking']))
             return self.plan
         except Exception as exc:
@@ -325,8 +482,8 @@ class CameraPage(QWidget):
         self.export_button.setEnabled(self.last_report is not None and not busy)
 
     def device_changed(self,*args):
-        self.geometry=None;self.preview=None;self.last_report=None
-        if hasattr(self,'write_button'):self.update_actions()
+        self.geometry=None;self.preview=None;self.last_report=None;self.output_caps={}
+        if hasattr(self,'write_button'):self.refresh_output_choices();self.update_actions()
 
     def choose_sdk(self):
         path=QFileDialog.getExistingDirectory(self,'选择MVS安装目录或MvImport目录',self.sdk)
@@ -355,7 +512,7 @@ class CameraPage(QWidget):
         self.worker=CameraJob(action,payload,self.sdk,self);self.worker.result.connect(self.finished_result)
         self.worker.failed.connect(self.failed);self.worker.progress.connect(self.notify);self.worker.finished.connect(self.stopped)
         self.form_panel.setEnabled(False);self.devices_bar.setEnabled(False)
-        self.files_button.setEnabled(False);self.connection_button.setEnabled(False)
+        self.files_button.setEnabled(False);self.connection_button.setEnabled(False);self.language_box.setEnabled(False)
         self.compare_button.setEnabled(False);self.write_button.setEnabled(False);self.export_button.setEnabled(False)
         self.progress.setRange(0,0);self.progress.show();self.notify({'scan':'正在枚举相机…','inspect':'正在读取设备尺寸与范围…','compare':'正在读取选择器分组并对比参数…','write':'正在写入所选相机…'}[action]);self.worker.start()
 
@@ -367,17 +524,33 @@ class CameraPage(QWidget):
             self.notify('MVS '+data['sdk_version']+'：发现 '+str(len(data['devices']))+' 台相机。'+('请检查供电、网络与设备连接。' if not data['devices'] else '请选择目标后读取设备尺寸。'))
             self.last_report=data
         elif action=='inspect':
-            self.geometry=data;s=self.settings();s.sensor_width=data['sensor_width']
+            self.geometry=data;self.output_caps=data.get('output_source_choices',{});s=self.settings(validate=False);s.sensor_width=data['sensor_width']
             scan=data.get('scan_type','').lower()
             if 'line' in scan:s.kind='line'
             elif 'area' in scan:s.kind='area';s.frame_selector='FrameStart'
             if s.kind=='area':s.sensor_height=data['sensor_height']
+            model=data['device'].get('model','');matched=next((p for p in PRESETS.values() if model.startswith(p['model'])),None)
+            if matched:s.pixel_pitch_um=matched['pixel_pitch_um']
+            elif s.precision_source=='optics':s.pixel_pitch_um=0
             if data.get('pixel_format'):s.pixel_format=data['pixel_format']['value']
-            self.load_settings(s);self.notify('已读取 '+data['device']['model']+' / '+data['device']['serial']+'；精度标定沿用工位配置。')
+            self.load_settings(s);self.notify('已读取 '+data['device']['model']+' / '+data['device']['serial']+'；'+('请核对镜头像元与工位标定。' if not matched else '精度标定沿用工位配置。'))
+            self.apply_enum_choices('pixel_format',['',*data.get('pixel_format',{}).get('choices',[])])
+            for key,choices in data.get('trigger_io_choices',{}).items():self.apply_enum_choices(key,choices)
             self.log.setPlainText(json.dumps(data,ensure_ascii=False,indent=2))
             self.last_report=data
         elif action=='compare':
             self.preview=data;self.last_report=data;self.geometry=data['geometry'];self.render_plan(data['plan'])
+            for row in data['rows']:
+                if row['entry']['key']=='LineSource' and row.get('capability'):
+                    cap=row['capability'];line=row['entry']['selectors'].get('LineSelector')
+                    self.output_caps[line]={'status':'readable','choices':cap.get('choices',[]),'value':cap['value'],'writable':cap['writable']}
+                if row.get('capability'):
+                    key=row['entry']['key'];choices=row['capability'].get('choices',[])
+                    if key=='PixelFormat':self.apply_enum_choices('pixel_format',['',*choices])
+                    elif key=='EncoderSourceA':self.apply_enum_choices('encoder_line',choices)
+                    elif key=='TriggerSource' and row['entry']['selectors'].get('TriggerSelector')==data['plan']['settings']['frame_selector']:
+                        self.apply_enum_choices('frame_line',[v for v in choices if v.startswith('Line') and v[4:].isdigit()])
+            self.refresh_output_choices()
             self.log.setPlainText(json.dumps(data,ensure_ascii=False,indent=2))
             def context(e):return ','.join(e['selectors'].values())+' / '+e['key'] if e['selectors'] else e['key']
             self.fill(self.compare_table,[[context(r['entry']),'模式切换后读取' if r['before'] is None else r['before'],r['entry']['value'],r['error'] or r['status']] for r in data['rows']])
@@ -394,7 +567,7 @@ class CameraPage(QWidget):
 
     def stopped(self):
         job=self.worker;self.worker=None;job.deleteLater();self.form_panel.setEnabled(True);self.devices_bar.setEnabled(True);self.progress.hide();self.enable_fields();self.update_actions()
-        self.files_button.setEnabled(True);self.connection_button.setEnabled(True)
+        self.files_button.setEnabled(True);self.connection_button.setEnabled(True);self.language_box.setEnabled(True)
 
     def notify(self,text,error=False):
         self.message.setText(text);self.message.setVisible(bool(text));self.message.setProperty('error',error);self.message.style().unpolish(self.message);self.message.style().polish(self.message)

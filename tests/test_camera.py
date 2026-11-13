@@ -6,7 +6,7 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 from camera_model import CameraSettings,calculate,settings_from_dict,config_dict,node_id,import_mfs_text,CameraError
 from camera_sdk import NodeUnavailable,discover_mvs,enumerate_cameras
-from camera_transaction import compare,apply_comparison,CameraWriteError,selectors
+from camera_transaction import compare,apply_comparison,CameraWriteError,selectors,read_output_sources,read_trigger_ios
 
 
 class FakeCamera:
@@ -98,11 +98,27 @@ class CameraCalculationTests(unittest.TestCase):
         plan=calculate(s);m=plan['metrics'];self.assertAlmostEqual(m['x_mm_per_px'],.112)
         self.assertAlmostEqual(m['y_mm_per_px'],.1);self.assertEqual(m['product_height_lines'],3000)
         self.assertEqual(m['square_pixel_product_lines'],2679);self.assertTrue(plan['warnings'])
+        inverse=CameraSettings(precision_source='optics',optics_direction='precision_to_wd',focal_length_mm=25,pixel_pitch_um=7,x_mm_per_px=.112)
+        self.assertAlmostEqual(calculate(inverse)['metrics']['working_distance_mm'],400)
+        self.assertEqual(settings_from_dict(config_dict(inverse)),inverse)
+        old=config_dict(s);old.pop('optics_direction')
+        self.assertEqual(settings_from_dict(old).optics_direction,'wd_to_precision')
         s.kind='area';s.target_length_mm=120
         self.assertAlmostEqual(calculate(s)['metrics']['y_mm_per_px'],.112)
         old=config_dict(CameraSettings())
         for name in ('focal_length_mm','pixel_pitch_um','image_vertical_margin_mm'):old.pop(name)
         self.assertEqual(calculate(settings_from_dict(old))['metrics']['height'],3000)
+
+    def test_enum_inspection_restores_selectors_without_changing_io_modes(self):
+        camera=FakeCamera();camera.values[camera.ident('LineMode')]='Input'
+        camera.values[node_id({'key':'LineMode','selectors':{'LineSelector':'Line0'}})]='Strobe'
+        before=copy.deepcopy(camera.values);original=copy.deepcopy(camera.selectors)
+        sources=read_output_sources(camera);triggers=read_trigger_ios(camera,True)
+        self.assertIn('ExposureStartActive',sources['Line0']['choices'])
+        self.assertEqual(sources['Line1']['status'],'unavailable')
+        self.assertIn('Line3',triggers['frame_line']);self.assertIn('Line1',triggers['encoder_line'])
+        self.assertEqual(camera.selectors,original);self.assertEqual(camera.values,before)
+        self.assertTrue(all(key in original for key,_,_ in camera.writes))
 
     def test_line_physics_fixed_encoder_chain_and_real_roi_steps(self):
         s=CameraSettings();r=calculate(s,{'Width':{'min':16,'inc':16},'OffsetX':{'min':0,'inc':4}})

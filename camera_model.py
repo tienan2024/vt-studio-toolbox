@@ -18,6 +18,7 @@ class CameraSettings:
     sensor_width:int=4096
     sensor_height:int=2048
     precision_source:str='fov'
+    optics_direction:str='wd_to_precision'
     focal_length_mm:float=0
     pixel_pitch_um:float=0
     fov_width_mm:float=400
@@ -91,7 +92,9 @@ class CameraSettings:
                      'pre_divider','multiplier','post_divider','products_per_minute','exposure_us'):
             if getattr(self,name)<=0:raise CameraError(name+' 必须大于0。')
         if self.edge_factor not in (1,2,4):raise CameraError('计数倍率应为1、2或4，以相机实际计数为准。')
-        if self.precision_source=='optics' and (self.focal_length_mm<=0 or self.pixel_pitch_um<=0 or self.working_distance_mm<=self.focal_length_mm):
+        if self.optics_direction not in ('wd_to_precision','precision_to_wd'):raise CameraError('工作距离与精度的计算方向无效。')
+        optical_wd=self.x_mm_per_px*self.focal_length_mm/(self.pixel_pitch_um/1000) if self.pixel_pitch_um>0 and self.optics_direction=='precision_to_wd' else self.working_distance_mm
+        if self.precision_source=='optics' and (self.focal_length_mm<=0 or self.pixel_pitch_um<=0 or optical_wd<=self.focal_length_mm):
             raise CameraError('镜头估算需填写焦距、像元尺寸，且工作距离应大于焦距；实际精度请用实测视野校准。')
         if not 0<=self.rate_margin_percent<=100 or not 0<=self.square_tolerance_percent<=100:raise CameraError('余量/精度容差应在0～100%。')
         for name in ('width_override','height_override','offset_x','offset_y','a_debounce_ns','z_debounce_ns','strobe_duration_us','line_rate_override','gain','image_horizontal_margin_mm','image_vertical_margin_mm','focal_length_mm','pixel_pitch_um'):
@@ -114,7 +117,7 @@ def settings_from_dict(value):
     allowed={f.name for f in fields(CameraSettings)}
     if value['schema']=='vt-camera-config/1':
         legacy={'product_pitch_mm','image_top_margin_mm','image_bottom_margin_mm','allow_overheight'}
-        added={'line_y_source','calibration_length_mm','calibration_rows','image_horizontal_margin_mm','image_vertical_margin_mm'}
+        added={'line_y_source','calibration_length_mm','calibration_rows','image_horizontal_margin_mm','image_vertical_margin_mm','optics_direction'}
         if set(value)-(allowed-added)-legacy-{'schema'}:raise CameraError('旧相机配置含未知字段。')
         def old_number(key,default,positive=False):
             number=value.get(key,default)
@@ -146,7 +149,7 @@ def calculate(settings,limits=None):
     s=settings.validate();warnings=[];blocking=[]
     dx=s.fov_width_mm/s.sensor_width if s.precision_source=='fov' else s.x_mm_per_px
     if s.precision_source=='optics':
-        dx=s.pixel_pitch_um/1000*s.working_distance_mm/s.focal_length_mm
+        dx=s.x_mm_per_px if s.optics_direction=='precision_to_wd' else s.pixel_pitch_um/1000*s.working_distance_mm/s.focal_length_mm
         warnings.append('镜头参数为远距近似估算，请用实测视野校准；线扫Y精度仍由编码器决定。' if s.kind=='line' else '镜头参数按方形像元作远距近似估算，请用实测视野校准。')
     fov_x=dx*s.sensor_width
     lines=s.ppr*s.edge_factor*s.encoder_revs*s.multiplier/(s.pre_divider*s.post_divider) if s.kind=='line' else None
@@ -228,6 +231,7 @@ def calculate(settings,limits=None):
     if len({node_id(n) for n in entries})!=len(entries):raise CameraError('配置产生了重复或冲突节点。')
     return {'schema':'vt-camera-plan/1','settings':config_dict(s),'metrics':{
         'x_mm_per_px':dx,'y_mm_per_px':dy,'fov_width_mm':fov_x,'xy_difference_percent':aspect,
+        'working_distance_mm':dx*s.focal_length_mm/(s.pixel_pitch_um/1000) if s.precision_source=='optics' else s.working_distance_mm,
         'effective_counts_per_product':s.ppr*s.edge_factor*s.encoder_revs if lines is not None else None,
         'line_triggers_per_cycle':lines,'lines_per_product':lines,'required_line_rate_hz':required,'recommended_line_rate_hz':recommended,
         'product_height_lines':product_h,'vertical_margin_lines':margin_h,'background_height_lines':max(0,height-product_h),

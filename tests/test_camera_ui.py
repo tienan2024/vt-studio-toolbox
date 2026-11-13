@@ -38,11 +38,11 @@ class CameraDesktopTests(unittest.TestCase):
     def test_simple_default_and_reveal_settings_details_and_camera_actions(self):
         w=ToolboxWindow();w.show();w.select_page(3);p=w.camera;self.app.processEvents()
         try:
-            self.assertEqual(p.metrics.rowCount(),5);self.assertFalse(p.form_tabs.isTabVisible(1))
+            self.assertEqual(p.metrics.rowCount(),5);self.assertFalse(p.form_tabs.isTabVisible(p.basic_tab_count))
             self.assertGreaterEqual(p.metrics.viewport().height(),sum(p.metrics.rowHeight(i) for i in range(5)))
             self.assertTrue(p.devices_bar.isHidden());self.assertTrue(p.device_actions.isHidden());self.assertTrue(p.tabs.isHidden())
-            self.assertFalse(p.controls['target_width_mm'].isHidden());self.assertTrue(p.controls['focal_length_mm'].isHidden())
-            p.advanced_button.click();self.assertTrue(p.form_tabs.isTabVisible(1));self.assertEqual(p.form_tabs.currentIndex(),1)
+            self.assertFalse(p.controls['target_width_mm'].isHidden());self.assertFalse(p.controls['focal_length_mm'].isHidden())
+            p.advanced_button.click();self.assertTrue(p.form_tabs.isTabVisible(p.basic_tab_count));self.assertEqual(p.form_tabs.currentIndex(),p.basic_tab_count)
             p.advanced_button.click();self.assertEqual(p.form_tabs.currentIndex(),0)
             p.details_button.click();self.assertFalse(p.tabs.isHidden());self.assertTrue(p.frame_preview.isHidden())
             p.connection_button.click();self.assertFalse(p.devices_bar.isHidden());self.assertFalse(p.device_actions.isHidden())
@@ -60,11 +60,10 @@ class CameraDesktopTests(unittest.TestCase):
     def test_styled_controls_keep_popup_selection_and_distinct_plus_minus_hit_targets(self):
         w=ToolboxWindow();w.show();w.select_page(3);p=w.camera;self.app.processEvents()
         try:
-            p.advanced_button.click();self.app.processEvents()
-            combo=p.controls['precision_source'];combo.showPopup();self.app.processEvents()
+            combo=p.optical_mode;combo.showPopup();self.app.processEvents()
             self.assertTrue(combo.view().isVisible());self.assertGreaterEqual(combo.view().sizeHintForRow(0),32)
             QTest.keyClick(combo,Qt.Key.Key_Down);QTest.keyClick(combo,Qt.Key.Key_Return);self.app.processEvents()
-            self.assertEqual(combo.currentData(),'precision');p.recalculate()
+            self.assertEqual(combo.currentData(),'precision_to_wd');p.recalculate()
             spin=p.controls['target_width_mm'];option=QStyleOptionSpinBox();spin.initStyleOption(option)
             up=spin.style().subControlRect(QStyle.ComplexControl.CC_SpinBox,option,QStyle.SubControl.SC_SpinBoxUp,spin)
             down=spin.style().subControlRect(QStyle.ComplexControl.CC_SpinBox,option,QStyle.SubControl.SC_SpinBoxDown,spin)
@@ -72,7 +71,7 @@ class CameraDesktopTests(unittest.TestCase):
             before=spin.value();QTest.mouseClick(spin,Qt.MouseButton.LeftButton,pos=up.center())
             self.assertEqual(spin.value(),before+spin.singleStep())
             QTest.mouseClick(spin,Qt.MouseButton.LeftButton,pos=down.center());self.assertEqual(spin.value(),before)
-            self.assertEqual({p.controls[key].height() for key in ('kind','target_width_mm','precision_source')},{36})
+            self.assertGreaterEqual(spin.height(),28);self.assertEqual(p.camera_type.height(),36)
         finally:w.close();self.app.processEvents()
 
     def test_product_calibration_height_and_old_config_confirmation(self):
@@ -93,6 +92,33 @@ class CameraDesktopTests(unittest.TestCase):
             p.controls['line_y_source'].setCurrentIndex(p.controls['line_y_source'].findData('precision'));p.recalculate()
             self.assertEqual(p.settings().line_y_source,'precision')
             self.assertFalse(any('旧配置' in b for b in p.plan['blocking']))
+        finally:w.close();self.app.processEvents()
+
+    def test_mvs_tabs_presets_inverse_optics_and_bilingual_device_options(self):
+        w=ToolboxWindow();w.select_page(3);p=w.camera
+        try:
+            self.assertEqual([p.form_tabs.tabText(i) for i in range(3)],['产品参数','采集触发','数字 IO'])
+            self.assertEqual(p.parameter_table.rowCount(),9)
+            p.camera_type.setCurrentIndex(p.camera_type.findData('line2k'));p.recalculate()
+            self.assertEqual(p.settings().sensor_width,2048);self.assertEqual(p.settings().pixel_pitch_um,14)
+            self.assertEqual((p.settings().frame_line,p.settings().encoder_line),('Line3','Line1'))
+            p.camera_type.setCurrentIndex(p.camera_type.findData('area5mp'));p.recalculate()
+            self.assertTrue(p.line_trigger_group.isHidden());self.assertEqual(p.settings().frame_selector,'FrameStart')
+            self.assertFalse(any(n['key']=='EncoderSourceA' for n in p.plan['nodes']))
+            p.optical_mode.setCurrentIndex(p.optical_mode.findData('precision_to_wd'));p.controls['x_mm_per_px'].setValue(.15);p.recalculate()
+            self.assertTrue(p.controls['x_mm_per_px'].isEnabled());self.assertFalse(p.controls['working_distance_mm'].isEnabled())
+            self.assertAlmostEqual(p.controls['working_distance_mm'].value(),.15*25/.00345,places=3)
+            self.assertFalse(p.plan['blocking'])
+            p.advanced_button.click();self.assertFalse(p.form_tabs.isTabVisible(4))
+            p.camera_type.setCurrentIndex(p.camera_type.findData('line4k'));p.recalculate()
+            self.assertFalse(p.line_trigger_group.isHidden());self.assertTrue(p.form_tabs.isTabVisible(4))
+            p.output_caps={'Line0':{'status':'readable','choices':['ExposureStartActive','CounterActive']}}
+            p.refresh_output_choices();source=p.controls['output0_source']
+            self.assertFalse(source.isEditable());source.setCurrentIndex(source.findData('CounterActive'));p.recalculate()
+            raw=p.settings().output0_source;self.assertEqual(source.currentText(),'计数器有效')
+            p.language_box.setCurrentIndex(p.language_box.findData('en'))
+            self.assertEqual(source.currentText(),'CounterActive');self.assertEqual(p.settings().output0_source,raw)
+            self.assertEqual(p.form_tabs.tabText(2),'Digital IO')
         finally:w.close();self.app.processEvents()
 
     def test_compare_invalidation_background_write_and_close_protection(self):

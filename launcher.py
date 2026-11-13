@@ -333,7 +333,7 @@ def verify_package(report_path):
             if any(n['key']=='PreDivider' for n in camera_page.plan['nodes']) or camera_page.controls['ppr'].isEnabled():
                 raise RuntimeError('Frozen area camera plan included line-scan encoder controls')
             report.update(camera_page=True,camera_calculation=True,camera_area_plan=True,camera_write_guard=True)
-            if camera_page.form_tabs.isTabVisible(1) or not camera_page.tabs.isHidden() or not camera_page.devices_bar.isHidden():
+            if camera_page.form_tabs.isTabVisible(camera_page.basic_tab_count) or not camera_page.tabs.isHidden() or not camera_page.devices_bar.isHidden():
                 raise RuntimeError('Frozen camera default view did not hide advanced details')
             camera_page.load_settings(CameraSettings(target_length_mm=280,image_vertical_margin_mm=12))
             metrics=camera_page.plan['metrics']
@@ -346,9 +346,22 @@ def verify_package(report_path):
             for asset in ('chevron-down.svg','plus.svg','minus.svg'):
                 if QtGui.QIcon(str(Path(__file__).resolve().parent/'assets'/asset)).pixmap(16,16).isNull():
                     raise RuntimeError('Frozen camera control icon missing: '+asset)
-            combo=camera_page.controls['precision_source'];combo.showPopup();app.processEvents()
+            combo=camera_page.camera_type;combo.showPopup();app.processEvents()
             if not combo.view().isVisible():raise RuntimeError('Frozen styled camera dropdown did not open')
             combo.hidePopup();report['camera_styled_controls']=True
+            camera_page.camera_type.setCurrentIndex(camera_page.camera_type.findData('area5mp'));camera_page.recalculate()
+            if not camera_page.line_trigger_group.isHidden() or camera_page.parameter_table.rowCount()!=9:
+                raise RuntimeError('MVS camera tabs or area trigger visibility failed')
+            camera_page.optical_mode.setCurrentIndex(camera_page.optical_mode.findData('precision_to_wd'))
+            camera_page.controls['x_mm_per_px'].setValue(.15);camera_page.recalculate()
+            if abs(camera_page.plan['metrics']['working_distance_mm']-.15*25/.00345)>.001:
+                raise RuntimeError('Inverse optical calculation failed')
+            camera_page.camera_type.setCurrentIndex(camera_page.camera_type.findData('line4k'));camera_page.recalculate()
+            source=camera_page.controls['output0_source'];raw=source.currentData()
+            if source.isEditable():raise RuntimeError('Output source must use device enum selection')
+            camera_page.language_box.setCurrentIndex(camera_page.language_box.findData('en'))
+            if source.currentData()!=raw or source.currentText()!=raw:raise RuntimeError('Translated options changed SDK values')
+            report.update(camera_mvs_tabs=True,camera_inverse_optics=True,camera_enum_language=True)
             from PySide6.QtWidgets import QComboBox
             for page_index in range(4):
                 toolbox.select_page(page_index);app.processEvents()

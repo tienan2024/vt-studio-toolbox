@@ -143,7 +143,34 @@ def preview_camera(uid,settings,directory=None):
 def inspect_camera(uid,directory=None):
     with open_camera(uid,directory) as camera:
         geometry=camera.geometry();line='area' not in geometry.get('scan_type','').lower()
-        return {'device':camera.device,**geometry,'observed_trigger_state':observe_trigger_state(camera,line=line)}
+        return {'device':camera.device,**geometry,'observed_trigger_state':observe_trigger_state(camera,line=line),
+                'output_source_choices':read_output_sources(camera),'trigger_io_choices':read_trigger_ios(camera,line)}
+
+
+def read_output_sources(camera):
+    result={}
+    try:lines=camera.read('LineSelector','enum')['choices']
+    except CameraError:return result
+    with selectors(camera) as select:
+        for line in lines:
+            try:
+                select.select({'LineSelector':line});cap=camera.read('LineSource','enum')
+                result[line]={'status':'readable','choices':cap['choices'],'value':cap['value'],'writable':cap['writable']}
+            except CameraError as exc:result[line]={'status':'unavailable','detail':str(exc)}
+    return result
+
+
+def read_trigger_ios(camera,line):
+    result={}
+    with selectors(camera) as select:
+        try:
+            select.select({'TriggerSelector':'FrameBurstStart' if line else 'FrameStart'})
+            cap=camera.read('TriggerSource','enum');result['frame_line']=[v for v in cap['choices'] if v.startswith('Line') and v[4:].isdigit()]
+        except CameraError:pass
+        if line:
+            try:result['encoder_line']=camera.read('EncoderSourceA','enum')['choices']
+            except CameraError:pass
+    return result
 
 
 def _ordered(rows):
