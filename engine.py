@@ -17,7 +17,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 from vt_xml import write_vt_xml
 
-VERSION = "6.5.0"
+VERSION = "7.2.0"
 MAX_ROI_REGIONS = 64
 MAX_TOTAL_SAMPLES = 100_000
 SCHEMA = "vt-defect-lab/1"
@@ -424,8 +424,7 @@ def generate_batch(ok_paths: list[str], asset: Asset, settings: Settings,
                     mask.save(run/record["mask"], format="PNG")
                     if settings.export_vt_xml:
                         record['vt_xml']=f'images/{name}.xml'
-                        record['vt_xml_profile']='visiontrain-2.2-flaw-rectangle'
-                        write_vt_xml(run/record['vt_xml'],run/record['image'],record)
+                        write_vt_xml(run/record['vt_xml'],run/record['image'],record,mask)
                     write_json(run/record["annotation"], record)
                     manifest.write(json.dumps(record, ensure_ascii=False)+"\n")
                     manifest.flush()

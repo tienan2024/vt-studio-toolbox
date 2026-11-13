@@ -228,6 +228,11 @@ class CLITests(unittest.TestCase):
         self.assertEqual(len(records),6)
         self.assertEqual(len(list((run/'images').glob('*.xml'))),6)
         for record in records:
+            self.assertEqual(record['vt_xml_profile'],'visiontrain-2.2-flaw-polygon')
+            self.assertGreater(record['vt_xml_polygon_count'],0)
+            import xml.etree.ElementTree as ET
+            nodes=list(ET.parse(run/record['vt_xml']).getroot().find('_ItemsData'))
+            self.assertTrue(all(n.tag.endswith('.FlawPolygonRoiParameter') for n in nodes))
             self.assertEqual(len(record['allowed_rois_xyxy']),2)
             l,t,r,b=record['placement_xyxy'];rl,rt,rr,rb=record['allowed_roi_xyxy']
             self.assertTrue(rl<=l<r<=rr and rt<=t<b<=rb)

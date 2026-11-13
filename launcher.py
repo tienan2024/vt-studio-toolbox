@@ -17,7 +17,7 @@ def verify_package(report_path):
     try:
         import numpy as np
         from PIL import Image
-        from PySide6 import QtCore
+        from PySide6 import QtCore,QtGui
         from PySide6.QtWidgets import QApplication
         from toolbox import ToolboxWindow
         from engine import load_gray, load_image, VERSION
@@ -241,7 +241,7 @@ def verify_package(report_path):
             window.export();wait_worker(window)
             refined_run=Path(window.last_run)
             import xml.etree.ElementTree as ET
-            from vt_xml import ROOT_TYPE,RECT_TYPE
+            from vt_xml import ROOT_TYPE,POLYGON_TYPE,POINT_TYPE,PROFILE
             refined_records=[json.loads(s) for s in (refined_run/'manifest.jsonl').read_text(encoding='utf-8').splitlines()]
             if len(refined_records)!=5:
                 raise RuntimeError('Refined batch incomplete: '+window.message.text())
@@ -252,10 +252,13 @@ def verify_package(report_path):
                 if not (rl<=l<r<=rr and rt<=t<b<=rb):
                     raise RuntimeError('Patch crossed permitted region boundary')
                 doc=ET.parse(refined_run/record['vt_xml']).getroot()
-                node=doc.find('_ItemsData').find(RECT_TYPE)
+                nodes=doc.find('_ItemsData').findall(POLYGON_TYPE)
+                if doc.tag!=ROOT_TYPE or not nodes or record.get('vt_xml_profile')!=PROFILE:
+                    raise RuntimeError('VT polygon XML missing')
+                points=[(float(p.findtext('x')),float(p.findtext('y'))) for node in nodes for p in node.find('_PolygonPoints').findall(POINT_TYPE)]
                 x0,y0,x1,y1=record['bbox_xyxy']
-                if doc.tag!=ROOT_TYPE or node.findtext('_OriginPoint')!=f'{x0},{y0}' or float(node.findtext('_width'))!=x1-x0:
-                    raise RuntimeError('VT XML coordinates differ from changed-pixel bbox')
+                if [min(x for x,y in points)+1,min(y for x,y in points)+1,max(x for x,y in points)+1,max(y for x,y in points)+1]!=[x0,y0,x1,y1]:
+                    raise RuntimeError('VT polygon extent differs from changed-pixel bbox')
             window.apply_recipe(str(refined_run/'recipe.json'))
             if len(window.rois)!=2 or not window.auto_reference.isChecked():
                 raise RuntimeError('Refined recipe restore failed')
@@ -269,7 +272,99 @@ def verify_package(report_path):
             if not isinstance(window.ng_mode_picker,ModeStrip):
                 raise RuntimeError('Canvas modes are not flat tool buttons')
             report.update(auto_reference_disabled=True,adaptive_list_bounds=[80,180],flat_canvas_tools=True,
-                          multi_roi_regions=2,vt_xml_export_count=5,multi_roi_recipe_restored=True)
+                          multi_roi_regions=2,vt_xml_export_count=5,vt_xml_polygon_export=True,multi_roi_recipe_restored=True)
+            # The frozen GUI compiles the generated source and executes real C#.
+            toolbox.select_page(2);script_page=toolbox.script
+            from code_preview import CSharpPreview
+            preview=script_page.code_views[0];preview.highlighter.rehighlight()
+            if not isinstance(preview,CSharpPreview) or not preview.document().firstBlock().layout().formats():
+                raise RuntimeError('Frozen C# syntax highlighting missing')
+            script_page.ngtype_text.setText(' 污点 - 接头 - 内装折角 - 导流层缺失 - 导流层折角 ')
+            script_page.refresh()
+            if script_page.config['types']!=['污点','接头','内装折角','导流层缺失','导流层折角']:
+                raise RuntimeError('NGtype automatic parsing failed')
+            script_page.tabs.setCurrentIndex(1);script_page.ai_result.setCurrentIndex(1)
+            script_page.labels.setPlainText('污点，胶滴，接头')
+            script_page.start_test('frame');wait_worker(script_page)
+            if script_page.output_values.item(0,2).text()!='0|0|1|1|1' or script_page.output_values.item(1,2).text()!='污点':
+                raise RuntimeError('Frozen script generation or compiled C# result differs: '+script_page.message.text())
+            script_page.start_test('regression');wait_worker(script_page)
+            if '18 / 18' not in script_page.test_status.text():raise RuntimeError('Frozen script regression failed')
+            from script_generator import default_config,save_script
+            save_script(default_config(),root/'UserScript.cs')
+            no_ai=default_config();no_ai['use_ai']=False;script_page.load_config(no_ai)
+            script_page.ai_result.setCurrentIndex(1);script_page.array_state.setCurrentIndex(2)
+            script_page.start_test('frame');wait_worker(script_page)
+            if '0 次' not in script_page.test_status.text() or script_page.output_values.item(0,2).text()!='1|1|1|1|1':
+                raise RuntimeError('Frozen no-AI compatibility failed')
+            report.update(script_gui_compiled=True,script_regression_passed=18,script_no_ai_compatible=True,script_single_cs_saved=True,script_ngtype_auto_parse=True,script_csharp_highlight=True)
+            # New port editor must affect the compiled source, including array API keys.
+            script_page.load_config(default_config());panel=script_page.variables
+            panel.tables['输入'].item(2,1).setText('检测标签')
+            panel.tables['输出'].item(0,1).setText('检测位串')
+            script_page.ai_result.setCurrentIndex(1);script_page.labels.setPlainText('污点，接头')
+            script_page.array_state.setCurrentIndex(0);script_page.start_test('frame');wait_worker(script_page)
+            if script_page.output_values.item(0,0).text()!='检测位串' or script_page.output_values.item(0,2).text()!='0|0|1|1|1':
+                raise RuntimeError('Frozen editable port C# execution failed')
+            if panel.tables['输入'].rowCount()!=8 or panel.tables['输出'].rowCount()!=4:
+                raise RuntimeError('Frozen input/output groups differ')
+            import zipfile,struct
+            server=b'<Root><ModuleBase><Module Index="9" Name="ShellModule" DisplayName="Script"/></ModuleBase><ProceduresInfo><ProcedureBase><Procedure Index="10001" DisplayName="Inspection"/></ProcedureBase><ProcedureInsideModules><Procedure Index="10001"><Inside Index="9"/></Procedure></ProcedureInsideModules></ProceduresInfo></Root>'
+            payload=b''
+            for field,direction,name,kind in ((b'DynamicInData','Input','aiResult','int'),(b'DynamicOutData','Output','NG_name','string')):
+                payload+=field+b'\0'*12+('<ParamRoot><Categorys><Category Name="'+direction+'"><Items><Filter Name="%'+name+'%" ValueType="'+kind+'"/></Items></Category></Categorys></ParamRoot>').encode()
+            frame=struct.pack('>II',7,1)+b'9-ShellModule.mdata'.ljust(512,b'\0')+struct.pack('>I',len(payload))+payload
+            sol_path=root/'TEST_ONLY.sol'
+            with zipfile.ZipFile(sol_path,'w') as archive:
+                archive.writestr('SolutionFile/VmServer.xml',server);archive.writestr('SolutionFile/MoudleFrame',frame)
+            before=sol_path.read_bytes();panel.start_read(str(sol_path));wait_worker(script_page)
+            if panel.flow.currentText()!='Inspection' or panel.tables['输入'].rowCount()!=1 or panel.tables['输出'].rowCount()!=1 or before!=sol_path.read_bytes():
+                raise RuntimeError('Frozen SOL metadata extraction failed: '+panel.status.text())
+            report.update(script_editable_ports=True,script_variable_groups=True,sol_readonly_ports=True)
+            bridge=Path(__file__).resolve().parent/'vm_bridge/SolScriptHost.cs'
+            if not bridge.is_file() or not hasattr(panel,'write_button'):raise RuntimeError('SOL SDK adapter or apply control missing')
+            report['sol_apply_adapter_available']=True
+            toolbox.select_page(3);camera_page=toolbox.camera
+            camera_page.recalculate();metrics=camera_page.plan['metrics']
+            if metrics['lines_per_product']!=3000 or metrics['required_line_rate_hz']!=40000 or camera_page.write_button.isEnabled():
+                raise RuntimeError('Frozen camera calculation or write guard failed')
+            from camera_model import CameraSettings
+            camera_page.load_settings(CameraSettings(kind='area',target_length_mm=120,frame_selector='FrameStart'))
+            if any(n['key']=='PreDivider' for n in camera_page.plan['nodes']) or camera_page.controls['ppr'].isEnabled():
+                raise RuntimeError('Frozen area camera plan included line-scan encoder controls')
+            report.update(camera_page=True,camera_calculation=True,camera_area_plan=True,camera_write_guard=True)
+            if camera_page.form_tabs.isTabVisible(1) or not camera_page.tabs.isHidden() or not camera_page.devices_bar.isHidden():
+                raise RuntimeError('Frozen camera default view did not hide advanced details')
+            camera_page.load_settings(CameraSettings(target_length_mm=280,image_vertical_margin_mm=12))
+            metrics=camera_page.plan['metrics']
+            if (metrics['height'],metrics['product_height_lines'],metrics['background_height_lines'])!=(2920,2800,120):
+                raise RuntimeError('Frozen camera background-margin calculation failed')
+            camera_page.load_settings(CameraSettings(precision_source='optics',focal_length_mm=25,pixel_pitch_um=7))
+            if abs(camera_page.plan['metrics']['x_mm_per_px']-.112)>1e-9:
+                raise RuntimeError('Frozen camera optical estimate failed')
+            report.update(camera_simple_default=True,camera_background_margins=True,camera_optical_estimate=True)
+            for asset in ('chevron-down.svg','plus.svg','minus.svg'):
+                if QtGui.QIcon(str(Path(__file__).resolve().parent/'assets'/asset)).pixmap(16,16).isNull():
+                    raise RuntimeError('Frozen camera control icon missing: '+asset)
+            combo=camera_page.controls['precision_source'];combo.showPopup();app.processEvents()
+            if not combo.view().isVisible():raise RuntimeError('Frozen styled camera dropdown did not open')
+            combo.hidePopup();report['camera_styled_controls']=True
+            from PySide6.QtWidgets import QComboBox
+            for page_index in range(4):
+                toolbox.select_page(page_index);app.processEvents()
+                choices=toolbox.pages.widget(page_index).findChildren(QComboBox)
+                choice=next(c for c in choices if c.isVisible() and c.isEnabled())
+                choice.showPopup();app.processEvents()
+                if not choice.view().isVisible() or not choice.property('vtSharedReady'):
+                    raise RuntimeError('Shared controls missing on page '+str(page_index))
+                choice.hidePopup()
+            camera_page.load_settings(CameraSettings(height_override=3200,ppr=2000,products_per_minute=400))
+            keys={n['key']:n['value'] for n in camera_page.plan['nodes']}
+            if camera_page.plan['blocking'] or keys.get('AcquisitionBurstFrameCount')!=1 or keys.get('AcquisitionMode')!='Continuous':
+                raise RuntimeError('Single-product trigger configuration invalid')
+            if 'product_pitch_mm' in camera_page.controls or 'AcquisitionLineRate' in keys:
+                raise RuntimeError('Obsolete pitch input or inactive frequency write retained')
+            report.update(shared_controls_four_pages=True,camera_independent_height=True,camera_single_frame=True)
             from app import Canvas
             from PySide6.QtGui import QMouseEvent
             pan_canvas=Canvas('TEST_ONLY right-button pan')

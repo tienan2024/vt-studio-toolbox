@@ -4,6 +4,7 @@ __pycache__/
 build/
 release/
 verification/
+/verification
 outputs/
 /build/*.spec
 *.zip
@@ -18,3 +19,7 @@ secrets/
 *.key
 *.pfx
 *.p12
+*.sol
+*.mfs
+*.pfs
+local-settings*.json

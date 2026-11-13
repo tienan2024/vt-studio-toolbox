@@ -1,0 +1,43 @@
+{
+  "schema": "vt-script-product/1",
+  "product": "示例产品",
+  "use_ai": true,
+  "types": [
+    "污点",
+    "接头",
+    "内装折角",
+    "导流层缺失",
+    "导流层折角"
+  ],
+  "signals": [
+    {
+      "name": "全局小污点Result",
+      "type": "污点"
+    },
+    {
+      "name": "接头大污点Result",
+      "type": "接头"
+    },
+    {
+      "name": "ai导流层Result",
+      "type": "导流层缺失"
+    }
+  ],
+  "aliases": [
+    {
+      "match": "contains",
+      "value": "接头",
+      "type": "接头"
+    },
+    {
+      "match": "contains",
+      "value": "污点",
+      "type": "污点"
+    },
+    {
+      "match": "contains",
+      "value": "胶滴",
+      "type": "污点"
+    }
+  ]
+}

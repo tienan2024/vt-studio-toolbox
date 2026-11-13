@@ -1,35 +1,37 @@
-# VT 原生缺陷矩形 XML 导出
+# VT 原生缺陷多边形 XML 导出
 
-最后更新：2026-10-27
+最后更新：2026-11-12
 
-勾选批量区“VT XML”后，每张BMP旁写入同名XML。默认勾选；PNG精细掩膜和JSON仍保留。XML框取量化后实际变化像素的外接框，不是整块素材的放置框，也不是精细多边形分割。
+6.6起，勾选“VT XML”后，每张BMP旁写入同名多边形XML。多边形来自最终8位量化后的实际变化像素掩膜，PNG掩膜继续保留；JSON的bbox_xyxy仍是定位摘要。6.5旧批次的矩形XML不自动重写。
 
-## 格式依据与适用范围
+## 格式与边界
 
-依据本机 D:/VisionTrain2.2.0/Applications/Hik.VM.DeepLearningTool.exe 的公开数据类及原生保存结果核对；该文件内部FileVersion为1.4.1.30553。原生写入样本见verification/vt_native_probe.xml，导出样本使用官方loadXml读回的位置、宽高和中文类别验证见verification/vt_native_validation.json。验证仅构造/读取数据对象，不启动训练、不执行检测方案，不修改安装目录。
+依据本机D:/VisionTrain2.2.0/Applications/Hik.VM.DeepLearningTool.exe（内部版本1.4.1.30553）的原生保存、loadXml读取和GetImageDataByImage训练栅格化验证。导出器仅依赖NumPy和Python标准库，不携带官方程序集。其他VT版本、OCR或网页版平台格式未宣称通用兼容。
 
-用户指定参考的“尺寸与原点”模块继续使用原VT Studio转换核心；同名XML原样复制，坐标原点不移动。新增测试确认本格式可通过该核心复制且字节不变。新导出器为纯Python，不携带官方程序集，也不要求目标电脑安装VT。
-
-此profile针对本机VisionTrain缺陷检测的矩形标注结构；不把它标为Pascal VOC，也不宣称兼容OCR、其他检测任务或所有网页版AI平台格式。
-
-## 字段
-
-根节点：VisionMaster.ModuleMainWindow.ModuleDialogNew.DeepLearning.FlawTrainData。
-
-_ItemsData包含VisionMaster.ModuleMainWindow.ModuleDialogNew.DeepLearning.FlawCoverRoiParameter。矩形中：
+根节点为VisionMaster.ModuleMainWindow.ModuleDialogNew.DeepLearning.FlawTrainData；_ItemsData下每个区域为FlawPolygonRoiParameter完整类型名，同一缺陷的分离区域分别输出。
 
 | 字段 | 含义 |
 |---|---|
-| _OriginPoint | 左上角x,y，图像原始像素坐标 |
-| _width / _height | bbox右减左、下减上 |
-| _Angle | 0，轴对齐外接框 |
-| flags | 界面填写的缺陷类别，XML字符正确转义 |
-| _LevelNum | 2，缺陷区域 |
-| _ColorValue | 1，本批单一缺陷类的默认像素值 |
-| _Sign / _TIsVisible | True，区域有效且可见 |
+| _PolygonPoints | HikPcUI.ImageView.PolygonPoint列表，每个含x/y |
+| flags | 缺陷类别，中文和XML特殊字符正确转义 |
+| _LevelNum / _ColorValue | 2 / 1，与原版本类别约定一致 |
+| _Sign / _TIsVisible | True |
+| _IsVisibleLabel / _Opacity | True / 0.25 |
 
-根还保存_IsOKCalibrated=False和_ImagePath（对应输出BMP绝对路径）。图像和XML应一起导入；移动整个批次后通过VT图片导入流程重新建立当前图像路径。对既有数据集，应核对类别名称及其像素值映射；工具不修改训练项目的类别表。
+根保留_IsOKCalibrated=False和_ImagePath绝对图片路径。类别名称应与训练项目类别表一致，工具不修改该表。
 
-PNG掩膜保留实际改动的像素范围，XML矩形会包含框内正常像素，这是矩形标注本身的含义。若任务要求精细分割，应继续使用PNG掩膜，不能把矩形XML声称为逐像素分割。
+## 轮廓与坐标
 
-CLI使用--xml vt-flaw（默认）或--xml none。record中的vt_xml为批次相对路径，vt_xml_profile为visiontrain-2.2-flaw-rectangle。配方export_vt_xml默认true，可显式false关闭。
+沿像素单元边缘追踪轮廓，只删除共线点；不平滑、不外扩、不删小连通域。细线、单像素点、斜角相接和图像四边均保留。内部孔洞通过往返的零宽连接线并入所属外轮廓，利用原生奇偶填充保留正常区域；不能简单使用_Sign=False，因为本机VT训练栅格化不根据该字段扣除孔洞。点序列因此可能有重复顶点，这是孔洞连接所需，不能任意去重。
+
+**VT专用坐标补偿**：本机原生扫描器纵向使用(min,max]，横向写入索引额外+1。XML顶点因此等于PNG像素单元边界坐标减(1,1)，图像上/左边缘顶点允许-1。它不是JSON bbox坐标错误，也不能再按普通像素坐标统一加减；已用原生训练掩膜验证无偏移。不要将此profile直接当作通用多边形格式使用。
+
+掩膜须为与图像等大的非空L图；原始轮廓超过100万条像素边时明确拒绝导出，避免无界内存开销，不静默改回矩形。
+
+## 记录、兼容与验证
+
+CLI仍使用--xml vt-flaw或--xml none，旧配方export_vt_xml开关不变。record保存vt_xml相对路径、vt_xml_profile=visiontrain-2.2-flaw-polygon、vt_xml_polygon_count、vt_xml_point_count和vt_xml_coordinates=vt-2.2-native-scan-offset-minus-one。
+
+原“尺寸与原点”模块仍对已有XML原样复制，文件名及坐标均不修改；新多边形XML复制后字节一致。验证包括全部511种非空3×3掩膜、复杂凹形/孔洞/岛/细线/边缘点，以及本机VT原生读取点序列并栅格化为训练掩膜后与PNG逐像素比较。验证记录见verification/vt_polygon_native_validation.json，原生探针和官方DLL仅存在被忽略的本机验证目录。
+
+本轮没有在VT界面中训练模型或验证训练收益。当前“缺陷”仍按像素是否变化定义，未增加可见性阈值或人工边界修正；轮廓精确并不保证语义标注一定正确。

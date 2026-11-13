@@ -182,8 +182,7 @@ def generate_pool_batch(ok_paths, entries, settings, output_root, progress=None,
                     mask.save(run/record['mask'],format='PNG')
                     if settings.export_vt_xml:
                         record['vt_xml']=f'images/{name}.xml'
-                        record['vt_xml_profile']='visiontrain-2.2-flaw-rectangle'
-                        write_vt_xml(run/record['vt_xml'],run/record['image'],record)
+                        write_vt_xml(run/record['vt_xml'],run/record['image'],record,mask)
                     write_json(run/record['annotation'],record)
                     manifest.write(json.dumps(record,ensure_ascii=False)+'\n');manifest.flush()
                     done+=1;summary['completed']=done

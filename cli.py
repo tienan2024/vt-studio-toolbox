@@ -38,6 +38,42 @@ def parser():
     sub = p.add_subparsers(dest='command',required=True,parser_class=Parser)
     sub.add_parser('info',help='工具能力与版本')
     sub.add_parser('schema',help='机器可读的命令契约、参数单位和退出码')
+    template=sub.add_parser('script-template',help='返回默认产品脚本配置JSON')
+    template.add_argument('--output',help='另存可直接用于--config的产品JSON；文件必须不存在')
+    script_gen=sub.add_parser('script-code',help='生成可复制的VM脚本或保存单个.cs文件')
+    script_gen.add_argument('--config',help='产品JSON；缺省使用示例配置')
+    script_gen.add_argument('--output',help='单个.cs文件路径，文件必须不存在')
+    script_gen.add_argument('--preserve-from',help='保留此UserScript.cs中的两个USER CODE区')
+    script_test=sub.add_parser('script-test',help='编译并执行生成的C#源码离线测试')
+    script_test.add_argument('--config',help='产品JSON；缺省使用示例配置')
+    mode=script_test.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--cases',help='JSON测试输入对象数组')
+    mode.add_argument('--regression',action='store_true',help='运行产品预设回归')
+    script_test.add_argument('--preserve-from',help='使用已有脚本的两个USER CODE区')
+    script_apply=sub.add_parser('script-apply',help='用本机VM SDK编译脚本并另存已校验的SOL副本')
+    script_apply.add_argument('--config',help='产品JSON；缺省使用示例配置')
+    script_apply.add_argument('--preserve-from',help='保留已有脚本的两个USER CODE区')
+    script_apply.add_argument('--sol',required=True,help='输入方案路径，原文件保持只读')
+    script_apply.add_argument('--module-id',required=True,help='目标脚本模块ID，不能用名称猜测')
+    script_apply.add_argument('--output',required=True,help='新的SOL路径，不能覆盖')
+    script_apply.add_argument('--vm-apps',help='VisionMaster安装目录或Applications路径')
+    script_apply.add_argument('--password-stdin',action='store_true',help='从stdin单行读取方案密码；不提供密码命令行参数')
+    camera_template=sub.add_parser('camera-template',help='返回示例相机配置；使用现场数据替换示例值')
+    camera_template.add_argument('--output',help='另存新的相机配置JSON')
+    camera_plan=sub.add_parser('camera-plan',help='离线计算工位/编码器并生成节点计划')
+    camera_plan.add_argument('--config',help='vt-camera-config/2 JSON（兼容导入/1）；缺省为示例')
+    camera_plan.add_argument('--output',help='另存新的节点计划JSON')
+    camera_info=sub.add_parser('camera-info',help='通过本机MVS枚举GigE/USB3相机')
+    camera_info.add_argument('--sdk-dir',help='MVS安装目录或MvImport目录')
+    camera_inspect=sub.add_parser('camera-inspect',help='读回指定相机的尺寸、步长与像素格式')
+    camera_inspect.add_argument('--device',required=True,help='camera-info返回的uid，按传输类型和序列号定位')
+    camera_inspect.add_argument('--sdk-dir')
+    camera_compare=sub.add_parser('camera-compare',help='按选择器上下文读取相机并比较计划')
+    camera_compare.add_argument('--device',required=True);camera_compare.add_argument('--sdk-dir')
+    camera_compare.add_argument('--config',required=True);camera_compare.add_argument('--output',help='另存可供camera-write使用的新对比JSON')
+    camera_write=sub.add_parser('camera-write',help='复核对比后写入相机，保存/重载UserSet1并设为默认')
+    camera_write.add_argument('--comparison',required=True,help='camera-compare保存的原始对比JSON')
+    camera_write.add_argument('--sdk-dir')
     inspect = sub.add_parser('inspect',help='查看图像格式、尺寸与灰度/RGB兼容性')
     inspect.add_argument('image')
     conv = sub.add_parser('convert',help='复用 VT Studio 5.0 原核心，裁切/补边，保持左上角原点')
@@ -76,7 +112,7 @@ def parser():
     syn_roi=syn.add_mutually_exclusive_group()
     syn_roi.add_argument('--roi-normalized',help='允许区域 left,top,right,bottom；范围 0～1')
     syn_roi.add_argument('--roi-regions',help='多个允许框，分号分隔；替换各素材原有范围')
-    syn.add_argument('--xml',choices=['vt-flaw','none'],help='VT原生缺陷矩形XML或关闭；默认沿用配方/开启')
+    syn.add_argument('--xml',choices=['vt-flaw','none'],help='VT原生缺陷多边形XML或关闭；默认沿用配方/开启')
     for name in ['scale-min','scale-max','strength-min','strength-max','rotation','feather','reference-gray']:
         syn.add_argument('--'+name,type=float)
     validate = sub.add_parser('validate-recipe',help='检查配方，返回参数、素材信息与底图路径状态')
@@ -144,6 +180,17 @@ def command_schema():
                        '3':'partial conversion (skipped/failed files)','130':'cancelled'},
         'commands': {
             'info': {}, 'schema': {}, 'inspect': {'image':'path'},
+            'script-template': {'--output':'optional new raw product JSON file, usable with --config'},
+            'script-code': {'--config':'vt-script-product/1 JSON (optional)','--output':'optional new .cs file','--preserve-from':'existing UserScript.cs regions (optional)'},
+            'script-apply': {'--sol':'source SOL','--module-id':'explicit script ID','--output':'new SOL path; no overwrite',
+                             '--vm-apps':'installed VM Applications (optional)','--password-stdin':'read credential from stdin; never argv'},
+            'camera-template':{'--output':'optional new raw vt-camera-config/2 JSON'},
+            'camera-plan':{'--config':'optional camera config; default sample','--output':'optional new plan JSON'},
+            'camera-info':{'--sdk-dir':'optional installed MVS path'},
+            'camera-inspect':{'--device':'transport:serial UID','--sdk-dir':'optional MVS path'},
+            'camera-compare':{'--device':'UID','--config':'camera config','--output':'new comparison JSON','--sdk-dir':'optional MVS path'},
+            'camera-write':{'--comparison':'raw vt-camera-comparison/1 JSON; rechecked before writing','--sdk-dir':'optional MVS path'},
+            'script-test': {'--config':'vt-script-product/1 JSON (optional)','--cases':'JSON input array, exclusive with --regression','--regression':'built-in product regression','--preserve-from':'existing UserScript.cs regions (optional)','runtime':'Windows .NET Framework C# compiler; executes actual C# with offline API double'},
             'convert': {'--input':'BMP/PNG folder','--output':'independent output root',
                         '--width':'integer 1..200000 px','--height':'integer 1..200000 px',
                         '--fill':['black','white'],'--recursive':'default true; --no-recursive disables',
@@ -172,7 +219,7 @@ def command_schema():
         'multi_region_options':{'--roi-regions':'up to64 boxes l,t,r,b;l,t,r,b in0..1; exclusive with --roi-normalized',
                                 'placement':'whole transformed patch must fit one box; never use the union bounding box'},
         'xml_option':{'--xml':['vt-flaw','none'],'default':'enabled unless recipe disables',
-                      'profile':'VisionTrain 2.2.x FlawTrainData rectangle; XML beside BMP, exact mask is separate PNG'},
+                      'profile':'VisionTrain 2.2.x FlawTrainData polygon; XML contours follow final PNG mask, preserving islands and holes'},
         'default_synthesis_settings': asdict(Settings()),
         'compatibility':'vt-defect-lab/1 single recipes; vt-defect-pool/1 pool recipes; vt-defect-asset/1 assets',
         'pool_policy': {'matching':MATCH_POLICY,'per_ng_roi':True,'max_entries':200,
@@ -183,7 +230,7 @@ def command_schema():
                          'matching':'OK images and NG asset must have the same mode',
                          'mask':'L, 255 if any output channel changed; otherwise 0',
                          'rgb_recipe_min_tool_version':'6.1.0'},
-        'side_effects':'local files only; originals read-only; never train a model or upload images',
+        'side_effects':'image/SOL operations create local files; camera-write configures the selected camera and UserSet1; no cloud/training',
     }
 
 
@@ -191,14 +238,68 @@ def execute(args, cancel):
     def progress(event):
         if args.progress and sys.stderr is not None:
             print(json.dumps(event,ensure_ascii=False),file=sys.stderr,flush=True)
+    if args.command.startswith('camera-'):
+        from camera_model import CameraSettings,config_dict,settings_from_dict,calculate
+        def read_camera_json(path):
+            p=Path(path)
+            if p.stat().st_size>1_000_000:raise SynthesisError('相机配置/对比文件超过1MB。')
+            return json.loads(p.read_text(encoding='utf-8-sig'))
+        if args.command=='camera-template':
+            data=config_dict(CameraSettings())
+            if args.output:save_new_json(args.output,data)
+            return data,0
+        if args.command=='camera-plan':
+            data=calculate(settings_from_dict(read_camera_json(args.config)) if args.config else CameraSettings())
+            if args.output:save_new_json(args.output,data)
+            return data,0 if not data['blocking'] else 1
+        from camera_sdk import enumerate_cameras
+        from camera_transaction import inspect_camera,preview_camera,write_camera
+        if args.command=='camera-info':return enumerate_cameras(args.sdk_dir),0
+        if args.command=='camera-inspect':return inspect_camera(args.device,args.sdk_dir),0
+        if args.command=='camera-compare':
+            data=preview_camera(args.device,settings_from_dict(read_camera_json(args.config)),args.sdk_dir)
+            if args.output:save_new_json(args.output,data)
+            return data,0 if data['ready'] else 1
+        data=read_camera_json(args.comparison)
+        if not isinstance(data,dict) or data.get('schema')!='vt-camera-comparison/1':raise SynthesisError('需要camera-compare生成的原始对比文件。')
+        return write_camera(data,args.sdk_dir,lambda text:progress({'type':'progress','message':text})),0
+    if args.command.startswith('script-'):
+        from script_generator import default_config,save_script,generate_sources,variable_rows,run_cases,run_regression
+        def read_small(path):
+            p=Path(path)
+            if p.stat().st_size>1_000_000:raise SynthesisError('脚本配置或用例文件超过1MB。')
+            return p.read_text(encoding='utf-8-sig')
+        if args.command=='script-template':
+            config=default_config()
+            if args.output:save_new_json(args.output,config)
+            return config,0
+        config=json.loads(read_small(args.config)) if args.config else default_config()
+        previous=read_small(args.preserve_from) if args.preserve_from else None
+        if args.command=='script-code':
+            result={'filename':'UserScript.cs','code':generate_sources(config,previous)['UserScript.cs'],'variables':variable_rows(config)}
+            if args.output:result.update(save_script(config,args.output,previous))
+            return result,0
+        if args.command=='script-apply':
+            from sol_apply import apply_script
+            password=sys.stdin.readline().rstrip('\r\n') if args.password_stdin else None
+            try:return apply_script(args.sol,args.module_id,config,args.output,password,args.vm_apps,previous,
+                lambda text:progress({'type':'progress','message':text})),0
+            finally:password=None
+        if args.regression:
+            result=run_regression(config,previous)
+            return result,0 if result['passed']==result['total'] else 1
+        return run_cases(config,json.loads(read_small(args.cases)),previous),0
     if args.command == 'schema':
         return command_schema(),0
     if args.command == 'info':
         path = engine_path()
         return {'tool':'VT STUDIO 图像工具箱','version':VERSION,'cli_schema':CLI_SCHEMA,
                 'headless':True,'gpu_required':False,'network_required':False,
+                'cloud_service_required':False,'camera_local_network_required_for_gige':True,
                 'defect_input_modes':['L','RGB'],
                 'multi_ng_pool':True,'matching_policy':MATCH_POLICY,
+                'script_generator':True,'script_test_runtime':'compiled C# offline double',
+                'camera_parameters':True,'camera_device_transports':['GigE','USB3'],'camera_sdk':'installed MVS; no vendor DLL redistribution',
                 'legacy_engine_sha256':ENGINE_SHA256,'legacy_engine':str(path),
                 'commands':list(command_schema()['commands'])},0
     if args.command == 'inspect':
@@ -329,6 +430,7 @@ def main(argv=None):
                     'exit_code':code,'error':str(exc),'error_type':type(exc).__name__}
         if getattr(exc,'run_dir',None):
             envelope['run_dir'] = exc.run_dir
+        if getattr(exc,'report',None):envelope['data']=exc.report
     finally:
         signal.signal(signal.SIGINT,old_handler)
     if args and args.json_out:

@@ -413,7 +413,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(splitter, 1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(330)
+        scroll.setMinimumWidth(346)
         scroll.setMaximumWidth(440)
         self.controls = QWidget()
         left = QVBoxLayout(self.controls)
@@ -616,7 +616,7 @@ class MainWindow(QMainWindow):
         quantity_row.addWidget(self.quantity_info)
         self.vt_xml_check=QCheckBox('VT XML')
         self.vt_xml_check.setChecked(True)
-        self.vt_xml_check.setToolTip('VisionTrain 2.2.x 缺陷检测的原生矩形XML，与BMP同名；框为实际改动像素外接框，像素掩膜另存PNG。')
+        self.vt_xml_check.setToolTip('VisionTrain 2.2.x 原生多边形XML，与BMP同名；沿最终变化像素轮廓标注，保留分离区域和内部空洞，掩膜另存PNG。')
         quantity_row.addWidget(self.vt_xml_check)
         export_layout.addLayout(quantity_row)
         self.quantity_mode.currentIndexChanged.connect(self.refresh_quantity_plan)
@@ -655,7 +655,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right_widget)
         splitter.setSizes([350, 960])
         splitter.setStretchFactor(1, 1)
-        self.statusBar().showMessage(f"v{VERSION}  |  灰度 / RGB  |  VT 缺陷矩形 XML、PNG 掩膜与 JSON")
+        self.statusBar().showMessage(f"v{VERSION}  |  灰度 / RGB  |  VT 缺陷多边形 XML、PNG 掩膜与 JSON")
         for control in (self.scale_min, self.scale_max, self.strength_min, self.strength_max,
                         self.rotation, self.feather, self.reference, self.seed):
             control.valueChanged.connect(self.invalidate_preview)
@@ -1437,7 +1437,7 @@ class MainWindow(QMainWindow):
             "生成时从已圈选NG中按颜色模式、范围和尺寸匹配随机选用；未圈选项不参与。\n"
             "滚轮缩放，右键按住拖动平移。多边形按 Enter 或右键单击完成，Esc 清除。\n"
             "保存配方可保留素材和参数。原图不会被覆盖。\n\n"
-            "VT XML使用本机VisionTrain缺陷检测的原生矩形结构，框为实际变化像素的外接框。"
+            "VT XML使用本机VisionTrain的原生多边形结构，沿实际变化像素轮廓标注，保留空洞和分离区域。"
             "PNG掩膜保留精细像素范围，JSON记录来源与参数。请按源OK图分组划分数据。")
 
     def closeEvent(self, event):
@@ -1453,6 +1453,8 @@ def main():
     parser.add_argument("--ng", nargs='+', help="启动时批量导入 NG 图，不自动圈选")
     parser.add_argument("--ok", nargs="*", help="启动时导入 OK 底图")
     parser.add_argument("--recipe", help="启动时加载配方")
+    parser.add_argument("--script-tool", action='store_true',help='启动后打开脚本生成与测试')
+    parser.add_argument("--camera-tool", action='store_true',help='启动后打开相机参数')
     args = parser.parse_args()
     app = QApplication(sys.argv[:1])
     app.setApplicationName("VTStudioToolbox")
@@ -1472,6 +1474,8 @@ def main():
         if args.ng:
             window.select_page(1)
             QTimer.singleShot(0, lambda: window.defect.add_ng(args.ng))
+    if args.script_tool:window.select_page(2)
+    if args.camera_tool:window.select_page(3)
     return app.exec()
 
 

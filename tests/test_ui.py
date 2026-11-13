@@ -53,7 +53,8 @@ class DesktopWorkflowTest(unittest.TestCase):
     def wait_worker(self, window):
         deadline=time.monotonic()+40
         while window.is_busy() and time.monotonic()<deadline:
-            QTest.qWait(30)
+            self.app.processEvents()
+            time.sleep(.01)  # Release the GIL for Python contour work in QThread.
         self.assertFalse(window.is_busy(),'后台任务未在40秒内完成')
 
     def test_complete_desktop_workflow(self):

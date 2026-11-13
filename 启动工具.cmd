@@ -1,6 +1,42 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
+if exist "release\7.2.0\VTStudioToolbox\VTStudioToolbox.exe" (
+  start "" "release\7.2.0\VTStudioToolbox\VTStudioToolbox.exe"
+  exit /b
+)
+if exist "release\7.1.0\VTStudioToolbox\VTStudioToolbox.exe" (
+  start "" "release\7.1.0\VTStudioToolbox\VTStudioToolbox.exe"
+  exit /b
+)
+if exist "release\7.0.0\VTStudioToolbox\VTStudioToolbox.exe" (
+  start "" "release\7.0.0\VTStudioToolbox\VTStudioToolbox.exe"
+  exit /b
+)
+if exist "release\6.9.0\VTStudioToolbox\VTStudioToolbox.exe" (
+  start "" "release\6.9.0\VTStudioToolbox\VTStudioToolbox.exe"
+  exit /b
+)
+if exist "release\6.8.0\VTStudioToolbox\VTStudioToolbox.exe" (
+  start "" "release\6.8.0\VTStudioToolbox\VTStudioToolbox.exe"
+  exit /b
+)
+if exist "release\6.7.2\VTStudioToolbox\VTStudioToolbox.exe" (
+  start "" "release\6.7.2\VTStudioToolbox\VTStudioToolbox.exe"
+  exit /b
+)
+if exist "release\6.7.1\VTStudioToolbox\VTStudioToolbox.exe" (
+  start "" "release\6.7.1\VTStudioToolbox\VTStudioToolbox.exe"
+  exit /b
+)
+if exist "release\6.7.0\VTStudioToolbox\VTStudioToolbox.exe" (
+  start "" "release\6.7.0\VTStudioToolbox\VTStudioToolbox.exe"
+  exit /b
+)
+if exist "release\6.6.0\VTStudioToolbox\VTStudioToolbox.exe" (
+  start "" "release\6.6.0\VTStudioToolbox\VTStudioToolbox.exe"
+  exit /b
+)
 if exist "release\6.5.0\VTStudioToolbox\VTStudioToolbox.exe" (
   start "" "release\6.5.0\VTStudioToolbox\VTStudioToolbox.exe"
   exit /b
