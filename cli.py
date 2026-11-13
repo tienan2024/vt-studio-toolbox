@@ -63,7 +63,7 @@ def parser():
     camera_plan=sub.add_parser('camera-plan',help='离线计算工位/编码器并生成节点计划')
     camera_plan.add_argument('--config',help='vt-camera-config/2 JSON（兼容导入/1）；缺省为示例')
     camera_plan.add_argument('--output',help='另存新的节点计划JSON')
-    camera_info=sub.add_parser('camera-info',help='通过本机MVS枚举GigE/USB3相机')
+    camera_info=sub.add_parser('camera-info',help='通过本机MVS枚举GigE/USB3及对应虚拟相机')
     camera_info.add_argument('--sdk-dir',help='MVS安装目录或MvImport目录')
     camera_inspect=sub.add_parser('camera-inspect',help='读回指定相机的尺寸、步长与像素格式')
     camera_inspect.add_argument('--device',required=True,help='camera-info返回的uid，按传输类型和序列号定位')

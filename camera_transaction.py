@@ -1,5 +1,6 @@
 """Selector-aware comparison, ordered writes, readback and honest rollback reporting."""
 from contextlib import contextmanager
+from dataclasses import replace
 import math
 from camera_model import (CameraError,calculate,settings_from_dict,node_id,fingerprint)
 from camera_sdk import open_camera,NodeUnavailable
@@ -96,7 +97,7 @@ def _verify_capacity(camera,settings):
     values={r['key']:r['value'] for r in rows if r['status']=='已读取'}
     maximum=values.get('ResultingLineRate');external=values.get('ResultingTriggerLineRate')
     if settings.kind=='line' and isinstance(maximum,(int,float)) and maximum>0:
-        expected=calculate(settings)['metrics']['required_line_rate_hz']
+        expected=calculate(replace(settings,auto_frequency=False))['metrics']['required_line_rate_hz']
         required=max(expected,external if isinstance(external,(int,float)) and external>0 else 0)
         if required>maximum+1e-6:raise CameraError('目标成像设置允许的行频低于预计/已观测外部触发行频，请调整曝光、ROI或压缩并重新对比。')
     return rows
@@ -105,6 +106,8 @@ def _verify_capacity(camera,settings):
 def compare(camera,settings):
     geometry=camera.geometry();geometry['area']=settings.kind=='area'
     plan=calculate(settings,geometry['limits']);errors=list(plan['blocking']);rows=[]
+    if settings.kind=='line' and settings.auto_frequency and not plan['metrics']['frequency_solution']['limits_verified']:
+        errors.append('自动倍分频缺少设备的完整范围，请读取设备或核对节点支持。')
     if settings.sensor_width!=geometry['sensor_width']:errors.append('配置传感器宽度与设备不同，请先读取设备尺寸。')
     if settings.kind=='area' and settings.sensor_height!=geometry['sensor_height']:errors.append('配置传感器高度与设备不同，请先读取设备尺寸。')
     with selectors(camera) as select:

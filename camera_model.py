@@ -1,5 +1,5 @@
 """Physical calculation and typed, selector-aware camera plans; no SDK dependency."""
-from dataclasses import dataclass,asdict,fields
+from dataclasses import dataclass,asdict,fields,replace
 import hashlib
 import json
 import math
@@ -14,6 +14,12 @@ class CameraError(ValueError):pass
 @dataclass
 class CameraSettings:
     kind:str='line'
+    camera_model_id:str=''
+    optics_method:str='quick'
+    principal_plane_offset_mm:float=0
+    auto_frequency:bool=False
+    encoder_travel_mm_per_rev:float=0
+    frequency_tolerance_percent:float=1
     working_distance_mm:float=400
     sensor_width:int=4096
     sensor_height:int=2048
@@ -93,7 +99,13 @@ class CameraSettings:
             if getattr(self,name)<=0:raise CameraError(name+' 必须大于0。')
         if self.edge_factor not in (1,2,4):raise CameraError('计数倍率应为1、2或4，以相机实际计数为准。')
         if self.optics_direction not in ('wd_to_precision','precision_to_wd'):raise CameraError('工作距离与精度的计算方向无效。')
+        if self.optics_method not in ('quick','thin_lens'):raise CameraError('光学计算模式无效。')
+        if self.kind=='line' and self.auto_frequency and self.encoder_travel_mm_per_rev<=0:raise CameraError('自动倍分频需要填写编码器每圈对应的实际走料长度。')
+        if not 0<=self.frequency_tolerance_percent<=100:raise CameraError('采样误差容差应在0～100%。')
         optical_wd=self.x_mm_per_px*self.focal_length_mm/(self.pixel_pitch_um/1000) if self.pixel_pitch_um>0 and self.optics_direction=='precision_to_wd' else self.working_distance_mm
+        if self.optics_method=='thin_lens':
+            optical_wd=optical_wd+self.focal_length_mm if self.optics_direction=='precision_to_wd' else optical_wd+self.principal_plane_offset_mm
+            if self.precision_source=='optics' and self.optics_direction=='precision_to_wd' and optical_wd-self.principal_plane_offset_mm<=0:raise CameraError('反算工作距离必须大于0，请核对主平面偏移。')
         if self.precision_source=='optics' and (self.focal_length_mm<=0 or self.pixel_pitch_um<=0 or optical_wd<=self.focal_length_mm):
             raise CameraError('镜头估算需填写焦距、像元尺寸，且工作距离应大于焦距；实际精度请用实测视野校准。')
         if not 0<=self.rate_margin_percent<=100 or not 0<=self.square_tolerance_percent<=100:raise CameraError('余量/精度容差应在0～100%。')
@@ -117,7 +129,7 @@ def settings_from_dict(value):
     allowed={f.name for f in fields(CameraSettings)}
     if value['schema']=='vt-camera-config/1':
         legacy={'product_pitch_mm','image_top_margin_mm','image_bottom_margin_mm','allow_overheight'}
-        added={'line_y_source','calibration_length_mm','calibration_rows','image_horizontal_margin_mm','image_vertical_margin_mm','optics_direction'}
+        added={'line_y_source','calibration_length_mm','calibration_rows','image_horizontal_margin_mm','image_vertical_margin_mm','optics_direction','camera_model_id','optics_method','principal_plane_offset_mm','auto_frequency','encoder_travel_mm_per_rev','frequency_tolerance_percent'}
         if set(value)-(allowed-added)-legacy-{'schema'}:raise CameraError('旧相机配置含未知字段。')
         def old_number(key,default,positive=False):
             number=value.get(key,default)
@@ -150,7 +162,10 @@ def calculate(settings,limits=None):
     dx=s.fov_width_mm/s.sensor_width if s.precision_source=='fov' else s.x_mm_per_px
     if s.precision_source=='optics':
         dx=s.x_mm_per_px if s.optics_direction=='precision_to_wd' else s.pixel_pitch_um/1000*s.working_distance_mm/s.focal_length_mm
-        warnings.append('镜头参数为远距近似估算，请用实测视野校准；线扫Y精度仍由编码器决定。' if s.kind=='line' else '镜头参数按方形像元作远距近似估算，请用实测视野校准。')
+        if s.optics_method=='thin_lens':
+            if s.optics_direction=='wd_to_precision':dx=s.pixel_pitch_um/1000*(s.working_distance_mm+s.principal_plane_offset_mm-s.focal_length_mm)/s.focal_length_mm
+            warnings.append('薄透镜近轴模型，物距从前主平面计；主平面未知、畸变及对焦变化须用实测视野校准，不是测量精度保证。')
+        else:warnings.append('镜头参数为远距近似估算，请用实测视野校准；线扫Y精度仍由编码器决定。' if s.kind=='line' else '镜头参数按方形像元作远距近似估算，请用实测视野校准。')
     fov_x=dx*s.sensor_width
     lines=s.ppr*s.edge_factor*s.encoder_revs*s.multiplier/(s.pre_divider*s.post_divider) if s.kind=='line' else None
     dy=s.y_mm_per_px if lines is not None else (s.fov_height_mm/s.sensor_height if s.precision_source=='fov' else s.y_mm_per_px)
@@ -159,6 +174,15 @@ def calculate(settings,limits=None):
         elif s.line_y_source=='square':
             dy=dx;warnings.append('Y精度按方形像素规划，尚未证明编码器实际采样一致；请用原始产品图标定核对。')
         elif s.line_y_source=='legacy':blocking.append('旧配置已迁移：Y精度来自旧产品节距换算，请在工位标定中选择并确认新的Y精度来源后再写入。')
+    frequency_solution=None;target_dy=dy
+    if s.kind=='line' and s.auto_frequency:
+        from camera_frequency import solve_frequency
+        frequency_solution=solve_frequency(s.encoder_travel_mm_per_rev/(s.ppr*s.edge_factor*dy),limits)
+        s=replace(s,**{key:frequency_solution[key] for key in ('pre_divider','multiplier','post_divider')})
+        dy=s.encoder_travel_mm_per_rev/(s.ppr*s.edge_factor*frequency_solution['ratio'])
+        lines=s.ppr*s.edge_factor*s.encoder_revs*frequency_solution['ratio']
+        if abs(100*(dy/target_dy-1))>s.frequency_tolerance_percent+1e-9:blocking.append('设备整数倍分频无法满足目标Y采样容差，请调整工位或目标精度。')
+        if not frequency_solution['limits_verified']:warnings.append('倍分频使用离线规划范围1～256，连接相机后须按真实范围重算；不是设备支持保证。')
     if s.kind=='area' and s.precision_source=='optics':dy=dx
     product_h=math.ceil(s.target_length_mm/dy-1e-10)
     margin_h=math.ceil(s.image_vertical_margin_mm/dy-1e-10)
@@ -231,7 +255,12 @@ def calculate(settings,limits=None):
     if len({node_id(n) for n in entries})!=len(entries):raise CameraError('配置产生了重复或冲突节点。')
     return {'schema':'vt-camera-plan/1','settings':config_dict(s),'metrics':{
         'x_mm_per_px':dx,'y_mm_per_px':dy,'fov_width_mm':fov_x,'xy_difference_percent':aspect,
-        'working_distance_mm':dx*s.focal_length_mm/(s.pixel_pitch_um/1000) if s.precision_source=='optics' else s.working_distance_mm,
+        'working_distance_mm':dx*s.focal_length_mm/(s.pixel_pitch_um/1000)+(s.focal_length_mm-s.principal_plane_offset_mm if s.optics_method=='thin_lens' else 0) if s.precision_source=='optics' else s.working_distance_mm,
+        'sensor_active_width_mm':s.sensor_width*s.pixel_pitch_um/1000,
+        'optical_magnification':s.pixel_pitch_um/1000/dx if s.pixel_pitch_um>0 else None,
+        'optics_method':s.optics_method if s.precision_source=='optics' else s.precision_source,
+        'frequency_solution':frequency_solution,'target_y_mm_per_px':target_dy,
+        'y_sampling_error_percent':100*(dy/target_dy-1) if s.kind=='line' and s.auto_frequency else None,
         'effective_counts_per_product':s.ppr*s.edge_factor*s.encoder_revs if lines is not None else None,
         'line_triggers_per_cycle':lines,'lines_per_product':lines,'required_line_rate_hz':required,'recommended_line_rate_hz':recommended,
         'product_height_lines':product_h,'vertical_margin_lines':margin_h,'background_height_lines':max(0,height-product_h),

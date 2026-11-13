@@ -98,16 +98,17 @@ class CameraDesktopTests(unittest.TestCase):
         w=ToolboxWindow();w.select_page(3);p=w.camera
         try:
             self.assertEqual([p.form_tabs.tabText(i) for i in range(3)],['产品参数','采集触发','数字 IO'])
-            self.assertEqual(p.parameter_table.rowCount(),9)
+            self.assertEqual(p.parameter_table.rowCount(),13)
             p.camera_type.setCurrentIndex(p.camera_type.findData('line2k'));p.recalculate()
-            self.assertEqual(p.settings().sensor_width,2048);self.assertEqual(p.settings().pixel_pitch_um,14)
+            self.assertEqual(p.settings().sensor_width,2048);self.assertEqual(p.settings().pixel_pitch_um,7)
+            self.assertEqual(p.settings().focal_length_mm,12);self.assertFalse(p.controls['focal_length_mm'].isEnabled())
             self.assertEqual((p.settings().frame_line,p.settings().encoder_line),('Line3','Line1'))
             p.camera_type.setCurrentIndex(p.camera_type.findData('area5mp'));p.recalculate()
             self.assertTrue(p.line_trigger_group.isHidden());self.assertEqual(p.settings().frame_selector,'FrameStart')
             self.assertFalse(any(n['key']=='EncoderSourceA' for n in p.plan['nodes']))
             p.optical_mode.setCurrentIndex(p.optical_mode.findData('precision_to_wd'));p.controls['x_mm_per_px'].setValue(.15);p.recalculate()
             self.assertTrue(p.controls['x_mm_per_px'].isEnabled());self.assertFalse(p.controls['working_distance_mm'].isEnabled())
-            self.assertAlmostEqual(p.controls['working_distance_mm'].value(),.15*25/.00345,places=3)
+            self.assertAlmostEqual(p.controls['working_distance_mm'].value(),.15*6/.00345,places=3)
             self.assertFalse(p.plan['blocking'])
             p.advanced_button.click();self.assertFalse(p.form_tabs.isTabVisible(4))
             p.camera_type.setCurrentIndex(p.camera_type.findData('line4k'));p.recalculate()
@@ -119,10 +120,15 @@ class CameraDesktopTests(unittest.TestCase):
             p.language_box.setCurrentIndex(p.language_box.findData('en'))
             self.assertEqual(source.currentText(),'CounterActive');self.assertEqual(p.settings().output0_source,raw)
             self.assertEqual(p.form_tabs.tabText(2),'Digital IO')
+            p.optical_mode.setCurrentIndex(p.optical_mode.findData('fov'));p.recalculate()
+            self.assertAlmostEqual(p.controls['x_mm_per_px'].value(),p.plan['metrics']['x_mm_per_px'],places=6)
+            form=p.field_forms['working_distance_mm']
+            self.assertTrue(form.table.isRowHidden(form.rows[p.controls['working_distance_mm']]))
         finally:w.close();self.app.processEvents()
 
     def test_compare_invalidation_background_write_and_close_protection(self):
         w=ToolboxWindow();w.show();w.select_page(3);p=w.camera;camera=FakeCamera()
+        p.load_settings(CameraSettings())
         try:
             p.device.addItem('SIMULATED CAMERA',camera.device['uid']);p.device.setCurrentIndex(1)
             with patch('camera_ui.preview_camera',side_effect=lambda uid,s,sdk:compare(camera,s)):

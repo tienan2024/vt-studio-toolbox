@@ -1,11 +1,32 @@
 """Reference presets and display labels; SDK values are never translated."""
 PRESETS={
-    'line2k':{'zh':'2K 线扫相机','en':'2K line scan','kind':'line','sensor_width':2048,'sensor_height':1,'pixel_pitch_um':14.0,'model':'MV-CL022-91GM'},
-    'line4k':{'zh':'4K 线扫相机','en':'4K line scan','kind':'line','sensor_width':4096,'sensor_height':2,'pixel_pitch_um':7.0,'model':'MV-CL042-91GM'},
-    'area5mp':{'zh':'500万 面阵相机','en':'5MP area scan','kind':'area','sensor_width':2448,'sensor_height':2048,'pixel_pitch_um':3.45,'model':'MV-CS050-60GC'},
+    'line2k':{'kind':'line','sensor_width':2048,'sensor_height':2,'pixel_pitch_um':7.0,'model':'MV-CL024-91GM','color':False,'id':9570},
+    'line2k_color':{'kind':'line','sensor_width':2048,'sensor_height':3,'pixel_pitch_um':7.0,'model':'MV-CL024-91GC','color':True,'id':9576},
+    'line4k':{'kind':'line','sensor_width':4096,'sensor_height':2,'pixel_pitch_um':7.0,'model':'MV-CL042-91GM','color':False,'id':7996},
+    'line4k_color':{'kind':'line','sensor_width':4096,'sensor_height':2,'pixel_pitch_um':7.0,'model':'MV-CL042-91GC','color':True,'id':7997},
+    'area5mp':{'kind':'area','sensor_width':2448,'sensor_height':2048,'pixel_pitch_um':3.45,'model':'MV-CS050-60GM V5','color':False,'id':12568},
+    'area5mp_color':{'kind':'area','sensor_width':2448,'sensor_height':2048,'pixel_pitch_um':3.45,'model':'MV-CS050-60GC V5','color':True,'id':12567},
 }
+for _p in PRESETS.values():
+    _p['zh']=_p['model']+' · '+('彩色' if _p['color'] else '黑白')
+    _p['en']=_p['model']+' · '+('Color' if _p['color'] else 'Mono')
+    _p['source']='https://www.hikrobotics.com/cn/machinevision/productdetail/?id='+str(_p['id'])
+
+# Fixed pairings are supplied by the operator; never infer them from model order.
+LENSES={
+    'MVL-AF2524M-M42':{'focal_length_mm':25.0,'image_circle_mm':29.0,'min_distance_mm':150,
+        'source':'https://www.hikrobotics.com/cn2/source/vision/document/2023/9/5/MVL-AF2524M-M42_20230808.pdf'},
+    'MVL-KF1228M-12MP':{'focal_length_mm':12.0,'image_circle_mm':17.6,'min_distance_mm':100,
+        'source':'https://www.hikrobotics.com/en2/source/vision/document/2023/9/19/MVL-KF1228M-12MP_datasheet_20221024.pdf'},
+    'MVL-HF0628M-6MPE':{'focal_length_mm':6.0,'image_circle_mm':9.0,'min_distance_mm':100,
+        'source':'https://www.hikrobotics.com/en2/source/vision/document/2023/9/19/MVL-HF0628M-6MPE_datasheet_20221022.pdf'},
+}
+for _key,_p in PRESETS.items():
+    _p['lens_model']='MVL-KF1228M-12MP' if _key.startswith('line2k') else ('MVL-AF2524M-M42' if _key.startswith('line4k') else 'MVL-HF0628M-6MPE')
+    _p['focal_length_mm']=LENSES[_p['lens_model']]['focal_length_mm']
 
 LABELS={
+    'quick':('快速估算','Quick estimate'),'thin_lens':('专业计算','Professional'),
     'custom':('自定义 / 已连接设备','Custom / connected device'),
     'wd_to_precision':('工作距离 → 精度','Distance → precision'),
     'precision_to_wd':('精度 → 工作距离','Precision → distance'),

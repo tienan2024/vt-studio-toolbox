@@ -20,7 +20,7 @@ class NodeUnavailable(CameraError):
 
 def discover_mvs(directory=None):
     candidates=[directory,os.environ.get('VT_MVS_DIR'),os.environ.get('MVCAM_COMMON_RUNENV'),
-                'D:/MVS/MVS','C:/Program Files (x86)/MVS','C:/Program Files/MVS']
+                'D:/MVS/MVS','D:/MVS','C:/Program Files (x86)/MVS','C:/Program Files/MVS']
     for candidate in candidates:
         if not candidate:continue
         root=Path(candidate)
@@ -84,20 +84,24 @@ def runtime(directory=None):
 
 
 def _devices(sdk,p):
-    items=p.MV_CC_DEVICE_INFO_LIST();_check(sdk.MvCamera.MV_CC_EnumDevices(5,items),'枚举GigE/USB3相机')
+    # Official CameraParams.h: GigE=1, USB3=4, virtual GigE=16, virtual USB3=32.
+    # GenTL frame-grabber transports have different structures and are not cast here.
+    items=p.MV_CC_DEVICE_INFO_LIST();_check(sdk.MvCamera.MV_CC_EnumDevices(0x35,items),'枚举GigE/USB3及虚拟相机')
     result=[]
     if items.nDeviceNum>256:raise CameraError('设备枚举数量无效。')
     for i in range(items.nDeviceNum):
         if not items.pDeviceInfo[i]:raise CameraError('SDK返回了无效的设备指针。')
         info=p.MV_CC_DEVICE_INFO();ctypes.memmove(ctypes.byref(info),items.pDeviceInfo[i],ctypes.sizeof(info))
-        if info.nTLayerType not in (1,4):continue
-        transport='GigE' if info.nTLayerType==1 else 'USB3'
-        data=info.SpecialInfo.stGigEInfo if transport=='GigE' else info.SpecialInfo.stUsb3VInfo
+        transport={1:'GigE',4:'USB3',16:'VirtualGigE',32:'VirtualUSB3'}.get(info.nTLayerType)
+        if transport is None:continue
+        gige=info.nTLayerType in (1,16)
+        data=info.SpecialInfo.stGigEInfo if gige else info.SpecialInfo.stUsb3VInfo
         serial=_text(data.chSerialNumber)
         if not serial:continue
         record={'uid':transport+':'+serial,'serial':serial,'transport':transport,'model':_text(data.chModelName),
                 'name':_text(data.chUserDefinedName)}
-        if transport=='GigE':record['ip']='.'.join(str((data.nCurrentIp>>shift)&255) for shift in (24,16,8,0))
+        record['virtual']=info.nTLayerType in (16,32)
+        if gige:record['ip']='.'.join(str((data.nCurrentIp>>shift)&255) for shift in (24,16,8,0))
         result.append((record,info))
     return result
 
@@ -160,6 +164,9 @@ class Camera:
         limits={key:self.read(key,'int') for key in ('Width','Height','OffsetX')}
         try:limits['OffsetY']=self.read('OffsetY','int')
         except CameraError:pass
+        for key in ('PreDivider','Multiplier','PostDivider'):
+            try:limits[key]=self.read(key,'int')
+            except CameraError:pass
         def dimension(keys,fallback):
             for key in keys:
                 try:return self.read(key,'int')['value']

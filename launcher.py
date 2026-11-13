@@ -350,11 +350,11 @@ def verify_package(report_path):
             if not combo.view().isVisible():raise RuntimeError('Frozen styled camera dropdown did not open')
             combo.hidePopup();report['camera_styled_controls']=True
             camera_page.camera_type.setCurrentIndex(camera_page.camera_type.findData('area5mp'));camera_page.recalculate()
-            if not camera_page.line_trigger_group.isHidden() or camera_page.parameter_table.rowCount()!=9:
+            if not camera_page.line_trigger_group.isHidden() or camera_page.parameter_table.rowCount()!=13:
                 raise RuntimeError('MVS camera tabs or area trigger visibility failed')
             camera_page.optical_mode.setCurrentIndex(camera_page.optical_mode.findData('precision_to_wd'))
             camera_page.controls['x_mm_per_px'].setValue(.15);camera_page.recalculate()
-            if abs(camera_page.plan['metrics']['working_distance_mm']-.15*25/.00345)>.001:
+            if abs(camera_page.plan['metrics']['working_distance_mm']-.15*6/.00345)>.001:
                 raise RuntimeError('Inverse optical calculation failed')
             camera_page.camera_type.setCurrentIndex(camera_page.camera_type.findData('line4k'));camera_page.recalculate()
             source=camera_page.controls['output0_source'];raw=source.currentData()
