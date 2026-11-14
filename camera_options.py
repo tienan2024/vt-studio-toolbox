@@ -62,7 +62,7 @@ FIELD_LABELS={
     'working_distance_mm':'Working distance','focal_length_mm':'Focal length',
     'pixel_pitch_um':'Pixel pitch','x_mm_per_px':'Pixel precision',
     'image_horizontal_margin_mm':'Horizontal margin','image_vertical_margin_mm':'Vertical background',
-    'frame_line':'Frame trigger','encoder_line':'Line trigger','frame_selector':'Trigger selector',
+    'frame_line':'Frame trigger','encoder_line':'Encoder A input','frame_selector':'Trigger selector',
     'frame_edge':'Frame trigger edge','line_edge':'Line trigger edge','input_format':'Input format',
     'a_debounce_ns':'A debouncer','z_debounce_ns':'Frame debouncer','output0_enabled':'Enable output 1',
     'output4_enabled':'Enable output 2','output0_line':'Output 1 line','output4_line':'Output 2 line',

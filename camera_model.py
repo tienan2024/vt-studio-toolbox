@@ -105,6 +105,8 @@ class CameraSettings:
                      'pre_divider','multiplier','post_divider','products_per_minute','exposure_us'):
             if getattr(self,name)<=0:raise CameraError(name+' 必须大于0。')
         if self.edge_factor not in (1,2,4):raise CameraError('计数倍率应为1、2或4，以相机实际计数为准。')
+        if self.kind=='line' and not self.auto_frequency and any(not 1<=getattr(self,k)<=5 for k in ('pre_divider','multiplier','post_divider')):
+            raise CameraError('预分频、倍频、后分频必须分别在1～5以内。')
         if self.optics_direction not in ('wd_to_precision','precision_to_wd'):raise CameraError('工作距离与精度的计算方向无效。')
         if self.optics_method not in ('quick','thin_lens'):raise CameraError('光学计算模式无效。')
         if self.framing_source not in ('legacy','material','distance') or self.frequency_strategy not in ('pitch','cycle'):raise CameraError('视野或倍分频计算方式无效。')
@@ -146,7 +148,7 @@ def workflow_settings():
         focal_length_mm=12,pixel_pitch_um=7,precision_source='optics',
         framing_source='material',horizontal_margin_percent=10,vertical_margin_percent=2,target_width_mm=200,target_length_mm=400,
         frequency_strategy='cycle',auto_frequency=True,line_y_source='square',height_rounding=100,
-        cycle_idle_lines=100,ppr=1000,edge_factor=1,encoder_revs=1,pixel_format='',products_per_minute=300)
+        cycle_idle_lines=100,ppr=1000,edge_factor=1,encoder_revs=1,pixel_format='',products_per_minute=300,frequency_tolerance_percent=15)
 
 
 def settings_from_dict(value):
@@ -251,7 +253,7 @@ def calculate(settings,limits=None):
         dy=s.encoder_travel_mm_per_rev/(s.ppr*s.edge_factor*frequency_solution['ratio'])
         lines=s.ppr*s.edge_factor*s.encoder_revs*frequency_solution['ratio']
         if abs(100*(dy/target_dy-1))>s.frequency_tolerance_percent+1e-9:blocking.append('设备整数倍分频无法满足目标Y采样容差，请调整工位或目标精度。')
-        if not frequency_solution['limits_verified']:warnings.append('倍分频使用离线规划范围1～256，连接相机后须按真实范围重算；不是设备支持保证。')
+        if not frequency_solution['limits_verified']:warnings.append('倍分频使用1～5规划范围，连接相机后须按设备范围重算；不是设备支持保证。')
     if s.kind=='area' and (s.precision_source=='optics' or s.framing_source!='legacy'):dy=dx
     product_h=math.ceil(s.target_length_mm/dy-1e-10)
     material_w=math.ceil(s.target_width_mm/dx-1e-10)

@@ -49,7 +49,7 @@ class OpticalModelsTests(unittest.TestCase):
         import itertools
         caps={'PreDivider':{'min':1,'max':5,'inc':2},'Multiplier':{'min':2,'max':8,'inc':2},'PostDivider':{'min':1,'max':4,'inc':1}}
         result=solve_frequency(1.23,caps)
-        possible=[abs(1.23/(m/(p*q))-1) for p,m,q in itertools.product(range(1,6,2),range(2,9,2),range(1,5))]
+        possible=[abs(1.23/(m/(p*q))-1) for p,m,q in itertools.product(range(1,6,2),range(2,6,2),range(1,5))]
         self.assertAlmostEqual(abs(1.23/result['ratio']-1),min(possible))
 
     def test_auto_comparison_needs_device_ranges_and_round_trips_selected_factors(self):

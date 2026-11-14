@@ -18,13 +18,13 @@ class CycleWorkflowTests(unittest.TestCase):
         self.assertEqual(settings_from_dict(config_dict(s)),s)
 
     def test_real_cycle_travel_exposes_stretching_and_product_clipping(self):
-        s=workflow_settings();bad=calculate(replace(s,cycle_travel_mm=400,auto_frequency=False,multiplier=4))
+        s=workflow_settings();bad=calculate(replace(s,cycle_travel_mm=400,auto_frequency=False,multiplier=4,frequency_tolerance_percent=1))
         self.assertEqual(bad['metrics']['actual_product_height_lines'],4000)
         self.assertTrue(any('纵向精度' in reason for reason in bad['blocking']))
         self.assertTrue(any('空档' in reason for reason in bad['blocking']))
         auto=calculate(replace(s,cycle_travel_mm=400))
-        self.assertLess(abs(auto['metrics']['y_sampling_error_percent']),.01)
-        self.assertNotEqual(auto['metrics']['frequency_solution']['ratio'],4)
+        self.assertLess(abs(auto['metrics']['y_sampling_error_percent']),s.frequency_tolerance_percent)
+        self.assertEqual(auto['metrics']['frequency_solution']['ratio'],4)
         good=calculate(replace(s,cycle_travel_mm=429.6875));self.assertFalse(good['blocking'])
 
     def test_counting_modes_change_multiplication_without_changing_frame_plan(self):

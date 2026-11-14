@@ -7,7 +7,7 @@ from PySide6.QtGui import QPainter,QColor,QPen,QPixmap,QIcon,QPainterPath
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,
     QPushButton,QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QCheckBox,QTabWidget,
     QSplitter,QScrollArea,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,
-    QPlainTextEdit,QFileDialog,QProgressBar,QMenu,QGridLayout,QSizePolicy,QToolButton,QAbstractSpinBox)
+    QPlainTextEdit,QFileDialog,QProgressBar,QMenu,QGridLayout,QSizePolicy,QToolButton,QAbstractSpinBox,QLayout,QFrame)
 from styled_controls import make_combo
 from camera_model import CameraSettings,CameraError,calculate,config_dict,settings_from_dict,import_mfs_text,fingerprint,workflow_settings
 from camera_sdk import discover_mvs,enumerate_cameras
@@ -181,11 +181,12 @@ class CameraPage(QWidget):
         self.sdk=discover_mvs();root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(10)
         tools=QHBoxLayout();tools.addStretch()
         self.language_box=self.styled_combo();self.language_box.addItem('中文','zh');self.language_box.addItem('English','en')
-        self.language_box.setFixedWidth(136);tools.addWidget(self.language_box)
+        tools.addWidget(self.language_box)
         self.connection_button=self.button('连接与写入相机',lambda:None,tools);self.connection_button.setCheckable(True)
         self.files_button=self.button('配置与文件',lambda:None,tools);menu=QMenu(self.files_button)
         for title,action in [('打开配置',self.open_config),('保存配置',self.save_config),('读取 MFS',self.open_mfs),('设置 MVS 目录',self.choose_sdk)]:menu.addAction(title,action)
         self.files_button.setMenu(menu);root.addLayout(tools)
+        for widget in (self.language_box,self.connection_button,self.files_button):widget.setFixedSize(152,36)
         self.devices_bar=QWidget();bar=QHBoxLayout(self.devices_bar);bar.setContentsMargins(0,0,0,0)
         self.device=self.styled_combo();self.device.addItem('尚未枚举相机',None);bar.addWidget(self.device,1)
         self.scan_button=self.button('枚举相机',lambda:self.start_job('scan'),bar)
@@ -229,7 +230,11 @@ class CameraPage(QWidget):
         self.number(station,'image_horizontal_margin_mm','左右总留边 / mm',0,100000,3)
         self.number(station,'image_vertical_margin_mm','前后总留白 / mm',0,100000,3)
         self.frame_trigger_group=self.trigger_group(trigger,'frame_line','帧触发','Line3')
-        self.line_trigger_group=self.trigger_group(trigger,'encoder_line','行触发','Line1')
+        self.line_trigger_group=QWidget();line_layout=QVBoxLayout(self.line_trigger_group);line_layout.setContentsMargins(0,6,0,10);line_layout.setSpacing(8)
+        self.line_trigger_title=QLabel('行触发');self.line_trigger_title.setStyleSheet('font-weight:600;');line_layout.addWidget(self.line_trigger_title)
+        self.line_trigger_source=self.styled_combo();self.line_trigger_source.addItem('频率转换器输出','FrequencyConverter');self.line_trigger_source.setEnabled(False)
+        line_layout.addWidget(self.line_trigger_source);trigger.addRow(self.line_trigger_group)
+        self.encoder_trigger_group=self.trigger_group(trigger,'encoder_line','编码器 A 相输入','Line1')
         self.trigger_help=QLabel();self.trigger_help.setWordWrap(True);self.trigger_help.setObjectName('Subtle');trigger.addRow(self.trigger_help)
         self.combo(calibration,'kind','相机类型',[('线扫','line'),('面阵','area')])
         self.combo(calibration,'precision_source','精度来源',[('实测视野','fov'),('已知精度','precision'),('镜头估算','optics')])
@@ -251,9 +256,9 @@ class CameraPage(QWidget):
         self.combo(encoder,'edge_factor','实际计数倍率',[('×1',1),('×2',2),('×4',4)])
         self.controls['edge_factor'].setToolTip('×1示例为A相上升沿；倍率应与设备实际有效计数一致，本选项不自动改变硬件计数模式。')
         self.number(encoder,'encoder_revs','每帧间隔圈数',.000001,1000,6)
-        self.integer(encoder,'pre_divider','预分频 PreDivider',1,1000000)
-        self.integer(encoder,'multiplier','倍频 Multiplier',1,1000000)
-        self.integer(encoder,'post_divider','后分频 PostDivider',1,1000000)
+        self.integer(encoder,'pre_divider','预分频 PreDivider',1,5)
+        self.integer(encoder,'multiplier','倍频 Multiplier',1,5)
+        self.integer(encoder,'post_divider','后分频 PostDivider',1,5)
         self.number(image,'rate_margin_percent','行频能力预留 / %',0,100,1)
         self.combo(io,'frame_selector','帧触发选择器',[('FrameBurstStart','FrameBurstStart'),('FrameStart','FrameStart')])
         self.combo(io,'frame_edge','帧触发边沿',[('上升沿','RisingEdge'),('下降沿','FallingEdge')])
@@ -304,6 +309,7 @@ class CameraPage(QWidget):
         self.language_box.currentIndexChanged.connect(self.language_changed)
         split.addWidget(self.form_panel)
         right=QWidget();right_layout=QVBoxLayout(right);right_layout.setContentsMargins(8,0,0,0);right_layout.setSpacing(10)
+        right_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         title=QLabel('计算结果');title.setFixedHeight(28);title.setStyleSheet('font-size:18px;font-weight:600;');right_layout.addWidget(title)
         self.metrics=self.table(['计算项','结果','单位']);self.metrics.setFixedHeight(204);right_layout.addWidget(self.metrics)
         self.optics_summary=QLabel();self.optics_summary.setWordWrap(True);self.optics_summary.setObjectName('Subtle');right_layout.addWidget(self.optics_summary)
@@ -319,7 +325,9 @@ class CameraPage(QWidget):
         self.export_button=self.button('保存记录',self.export_report,actions);actions.addStretch()
         self.write_button=self.button('写入并保存 UserSet1',self.start_write,actions);self.write_button.setObjectName('Primary');right_layout.addWidget(self.device_actions);self.device_actions.hide()
         self.connection_button.toggled.connect(self.toggle_connection)
-        split.addWidget(right);split.setStretchFactor(0,0);split.setStretchFactor(1,1);split.setSizes([455,705])
+        self.result_scroll=QScrollArea();self.result_scroll.setWidgetResizable(True);self.result_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.result_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);self.result_scroll.setWidget(right)
+        split.addWidget(self.result_scroll);split.setStretchFactor(0,0);split.setStretchFactor(1,1);split.setSizes([455,705])
         self.form_panel.setMinimumWidth(450)
         self.progress=QProgressBar();self.progress.setFixedHeight(5);self.progress.setTextVisible(False);self.progress.hide();root.addWidget(self.progress)
         self.message=QLabel();self.message.setObjectName('Message');self.message.setWordWrap(True);self.message.setTextFormat(Qt.TextFormat.PlainText);root.addWidget(self.message)
@@ -485,6 +493,7 @@ class CameraPage(QWidget):
 
     def language_changed(self,*args):
         self.language=self.language_box.currentData() or 'zh';self.translate_options();self.enable_fields()
+        QTimer.singleShot(0,self.fit_result_text)
 
     def translate_options(self):
         en=self.language=='en'
@@ -535,6 +544,8 @@ class CameraPage(QWidget):
         label=QLabel(text);label.setWordWrap(True);label.setObjectName('Subtle');form.addRow(label)
 
     def load_settings(self,settings,preserve_locks=False):
+        if settings.kind=='line' and not settings.auto_frequency and any(not 1<=getattr(settings,k)<=5 for k in ('pre_divider','multiplier','post_divider')):
+            raise CameraError('旧配置的手动倍分频超出1～5，请先修正配置后导入。')
         self._loading=True
         if not preserve_locks:self.clear_value_locks()
         for key,value in asdict(settings).items():
@@ -586,7 +597,9 @@ class CameraPage(QWidget):
                    'line_edge','a_debounce_ns','line_rate_override','limit_line_rate','line_y_source')
         for key in line_only:
             self.controls[key].setEnabled(line);self.field_forms[key].setRowVisible(self.controls[key],line)
-        self.line_trigger_group.setVisible(line);self.controls['encoder_line'].setEnabled(line)
+        self.line_trigger_group.setVisible(line);self.encoder_trigger_group.setVisible(line);self.controls['encoder_line'].setEnabled(line)
+        self.line_trigger_title.setText('Line trigger' if self.language=='en' else '行触发')
+        self.line_trigger_source.setItemText(0,'Frequency converter output' if self.language=='en' else '频率转换器输出')
         self.controls['sensor_height'].setEnabled(not line);self.controls['offset_y'].setEnabled(not line)
         self.controls['fov_width_mm'].setEnabled(fov);self.controls['fov_height_mm'].setEnabled(fov and not line)
         ysource=self.controls['line_y_source'].currentData()
@@ -614,7 +627,7 @@ class CameraPage(QWidget):
         for prefix in ('output0','output4'):
             for suffix in ('line','source'):self.controls[prefix+'_'+suffix].setEnabled(self.controls[prefix+'_enabled'].isChecked())
         self.controls['strobe_duration_us'].setEnabled(self.controls['output4_enabled'].isChecked())
-        self.trigger_help.setText(('Frame trigger only. Default input: Line0.' if self.language=='en' else '面阵仅使用帧触发；默认 Line0，可按实际接线选择。') if not line else ('Frame: Line3. Line input: Line1 via encoder and frequency converter.' if self.language=='en' else '帧触发 Line3；行输入 Line1，经编码器与自动推荐的倍分频。'))
+        self.trigger_help.setText(('Frame trigger only.' if self.language=='en' else '面阵仅使用帧触发。') if not line else ('Encoder A → FrequencyConverter → LineStart.' if self.language=='en' else '编码器 A 相 → 频率转换器 → 行触发。'))
         framing=self.controls['framing_source'].currentData();workflow=framing!='legacy';cycle=line and self.controls['frequency_strategy'].currentData()=='cycle'
         self.field_forms['framing_source'].setRowVisible(self.controls['framing_source'],False)
         margin=self.controls['horizontal_margin_percent'];blocked=margin.blockSignals(True)
@@ -655,9 +668,11 @@ class CameraPage(QWidget):
         self.tabs.setVisible(expanded);self.frame_preview.setVisible(not expanded and self.height()>=680)
         self.result_space.setVisible(not expanded)
         self.details_button.setText('收起参数明细' if expanded else '查看参数明细')
+        QTimer.singleShot(0,self.fit_result_text)
 
     def toggle_connection(self,expanded):
         self.devices_bar.setVisible(expanded);self.device_actions.setVisible(expanded)
+        QTimer.singleShot(0,self.fit_result_text)
 
     def showEvent(self,event):
         super().showEvent(event);QTimer.singleShot(0,self.fit_metrics)
@@ -667,6 +682,11 @@ class CameraPage(QWidget):
         if hasattr(self,'details_button'):
             self.frame_preview.setVisible(not self.details_button.isChecked() and self.height()>=680)
             QTimer.singleShot(0,self.fit_metrics)
+
+    def fit_result_text(self):
+        for label in (self.optics_summary,self.summary):
+            width=max(100,label.width())
+            label.setFixedHeight(max(label.fontMetrics().height(),label.heightForWidth(width)))
 
     def schedule_input_fit(self,*_):
         if not self._input_fit_pending:
@@ -689,6 +709,7 @@ class CameraPage(QWidget):
         self.metrics.setFixedHeight(max(header.height(),header.sizeHint().height())+sum(self.metrics.rowHeight(i) for i in range(self.metrics.rowCount()))+2*self.metrics.frameWidth()+4)
         for form in self.property_forms:form.fit()
         self.schedule_input_fit()
+        QTimer.singleShot(0,self.fit_result_text)
 
     @staticmethod
     def fill(table,rows):
@@ -760,7 +781,7 @@ class CameraPage(QWidget):
         self.optics_summary.setText(text)
         if plan['blocking']:message='；'.join(plan['blocking'])
         elif measured:
-            message='按实测走料计算采样比例；图高与周期空档单独校验。前后位置仍由下位机相位调整。'
+            message='Y 采样偏差 '+format(m['y_sampling_error_percent'],'+.2f')+'% · 允许 ±'+format(s['frequency_tolerance_percent'],'.3g')+'% · 前后位置由下位机相位调整。'
         else:message='按当前视野计算；镜头模型值请用实测视野核对。'
         self.summary.setText(message);self.summary.setToolTip('\n'.join(plan['blocking']+plan['warnings']))
 

@@ -337,9 +337,20 @@ def verify_package(report_path):
             from camera_model import CameraSettings,calculate
             fraction=calculate(CameraSettings(precision_source='precision',line_y_source='square',sensor_width=2048,
                 target_width_mm=40,target_length_mm=60,x_mm_per_px=.02,y_mm_per_px=.02,products_per_minute=300,
-                frequency_strategy='cycle',auto_frequency=True,cycle_travel_mm=90))
-            if fraction['blocking'] or fraction['metrics']['frequency_solution']['ratio']!=4.5 or fraction['metrics']['material_height_px']!=3000:
-                raise RuntimeError('Measured cycle must solve fractional factors without changing target sampling')
+                frequency_strategy='cycle',auto_frequency=True,cycle_travel_mm=90,frequency_tolerance_percent=15))
+            if fraction['blocking'] or fraction['metrics']['frequency_solution']['ratio']!=5 or fraction['metrics']['material_height_px']!=3334:
+                raise RuntimeError('Measured cycle must use small factors and report actual sampling')
+            report['camera_small_factors']=True
+            camera_page.connection_button.setChecked(True)
+            for _ in range(8):app.processEvents()
+            if camera_page.optics_summary.y()<=camera_page.metrics.geometry().bottom():
+                raise RuntimeError('Camera connection view overlaps summary and result table')
+            if len({c.size().toTuple() for c in (camera_page.language_box,camera_page.connection_button,camera_page.files_button)})!=1:
+                raise RuntimeError('Camera toolbar control sizes differ')
+            if camera_page.line_trigger_source.currentData()!='FrequencyConverter':
+                raise RuntimeError('Line trigger UI must show frequency converter output')
+            camera_page.connection_button.setChecked(False)
+            report.update(camera_connection_layout=True,camera_line_source=True)
             report['camera_cycle_capacity']=True;report['camera_measured_cycle']=True
             if camera_page.controls['working_distance_mm'].isHidden() or not camera_page.controls['working_distance_mm'].isEnabled() or not camera_page.controls['framing_source'].isHidden():
                 raise RuntimeError('Frozen automatic camera input layout failed')

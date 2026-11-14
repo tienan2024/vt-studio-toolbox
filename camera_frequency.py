@@ -3,6 +3,7 @@ import bisect,math
 from camera_model import CameraError
 
 KEYS=('PreDivider','Multiplier','PostDivider')
+FACTOR_MAX=5
 
 
 def solve_cycle_capacity(required_lines,counts_per_cycle,limits=None):
@@ -17,7 +18,7 @@ def solve_cycle_capacity(required_lines,counts_per_cycle,limits=None):
     low=minimum+max(0,math.ceil((1-minimum)/step))*step
     needed=max(low,math.ceil(required_lines/counts_per_cycle-1e-12))
     mult=low+math.ceil((needed-low)/step)*step
-    if mult>cap.get('max',256):raise CameraError('设备倍频上限不足，无法同时满足图高和周期空档。')
+    if mult>min(FACTOR_MAX,cap.get('max',FACTOR_MAX)):raise CameraError('1～5内的倍频不足以满足图高和周期空档。')
     return {'pre_divider':1,'multiplier':mult,'post_divider':1,'ratio':mult,'ratio_error_percent':None,
             'limits_verified':all(k in limits for k in KEYS),'strategy':'cycle','required_lines':required_lines}
 
@@ -26,10 +27,10 @@ def solve_frequency(target_ratio,limits=None):
     if not math.isfinite(target_ratio) or target_ratio<=0:raise CameraError('目标倍分频比必须为正数。')
     limits=limits or {};ranges=[]
     for key in KEYS:
-        cap=limits.get(key,{'min':1,'max':256,'inc':1})
-        minimum=int(cap.get('min',1));high=int(cap.get('max',256));step=max(1,int(cap.get('inc',1)))
+        cap=limits.get(key,{'min':1,'max':FACTOR_MAX,'inc':1})
+        minimum=int(cap.get('min',1));high=min(FACTOR_MAX,int(cap.get('max',FACTOR_MAX)));step=max(1,int(cap.get('inc',1)))
         low=minimum+max(0,math.ceil((1-minimum)/step))*step
-        if high<low:raise CameraError(key+'设备范围无效。')
+        if high<low:raise CameraError(key+'在设备支持范围与1～5内没有可用值。')
         if (high-low)//step+1>1024:raise CameraError(key+'搜索范围过大，请核对设备限制。')
         ranges.append(range(low,high+1,step))
     pres,mults,posts=ranges;best=None
