@@ -20,6 +20,21 @@ class CameraConditionTests(unittest.TestCase):
 
     def tearDown(self):self.w.close();self.app.processEvents()
 
+    def test_cycle_measurement_is_common_input_and_computes_factors(self):
+        p=self.p;p.form_tabs.setCurrentIndex(1)
+        for _ in range(6):self.app.processEvents()
+        self.assertTrue(p.controls['cycle_travel_mm'].isVisible())
+        self.assertEqual(p.metrics.item(5,1).text(),'待测量')
+        self.assertTrue(p.controls['multiplier'].isHidden())
+        p.controls['cycle_travel_mm'].setValue(429.6875);p.recalculate()
+        self.assertFalse(p.plan['blocking']);self.assertFalse(p.plan['metrics']['frequency_pending'])
+        self.assertEqual(p.metrics.item(5,1).text(),'1 / 4 / 1')
+        self.assertIn('脉冲/mm',p.optics_summary.text())
+        p.controls['auto_frequency'].setChecked(False);p.recalculate()
+        self.assertTrue(p.controls['multiplier'].isVisible())
+        p.controls['multiplier'].setValue(3);p.recalculate()
+        self.assertTrue(p.plan['blocking']);self.assertFalse(p.write_button.isEnabled())
+
     def test_typed_inputs_recalculate_and_reverse_known_conditions(self):
         p=self.p;controls=p.controls
         self.assertIsInstance(p.field_forms['target_width_mm'],ConditionForm)

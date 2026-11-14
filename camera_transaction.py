@@ -106,7 +106,7 @@ def _verify_capacity(camera,settings):
 def compare(camera,settings):
     geometry=camera.geometry();geometry['area']=settings.kind=='area'
     plan=calculate(settings,geometry['limits']);errors=list(plan['blocking']);rows=[]
-    if settings.kind=='line' and settings.auto_frequency and not plan['metrics']['frequency_solution']['limits_verified']:
+    if settings.kind=='line' and settings.auto_frequency and not plan['metrics']['frequency_pending'] and (not plan['metrics']['frequency_solution'] or not plan['metrics']['frequency_solution']['limits_verified']):
         errors.append('自动倍分频缺少设备的完整范围，请读取设备或核对节点支持。')
     if settings.sensor_width!=geometry['sensor_width']:errors.append('配置传感器宽度与设备不同，请先读取设备尺寸。')
     if settings.kind=='area' and settings.sensor_height!=geometry['sensor_height']:errors.append('配置传感器高度与设备不同，请先读取设备尺寸。')

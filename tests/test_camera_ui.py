@@ -28,7 +28,8 @@ class CameraDesktopTests(unittest.TestCase):
         w=ToolboxWindow();p=w.camera
         try:
             w.select_page(3);self.assertTrue(w.camera_nav.isChecked());self.assertEqual(w.pages.count(),4)
-            self.assertEqual(set(p.controls),{f.name for f in fields(CameraSettings)});self.assertEqual(p.plan['metrics']['lines_per_product'],4000)
+            self.assertEqual(set(p.controls),{f.name for f in fields(CameraSettings)})
+            self.assertTrue(p.plan['metrics']['frequency_pending']);self.assertIsNone(p.plan['metrics']['lines_per_product'])
             self.assertFalse(p.write_button.isEnabled())
             s=CameraSettings(kind='area',target_length_mm=120,frame_selector='FrameStart');p.load_settings(s)
             self.assertFalse(p.controls['ppr'].isEnabled());self.assertTrue(p.controls['sensor_height'].isEnabled())

@@ -28,7 +28,7 @@ for _key,_p in PRESETS.items():
 LABELS={
     'material':('材料宽度 → 工作距离','Material → distance'),
     'distance':('工作距离 → 视野','Distance → FOV'),
-    'cycle':('按Z周期推荐整数倍频','Integer cycle capacity'),
+    'cycle':('按实测周期走料匹配Y','Measured cycle travel'),
     'pitch':('按实测走料匹配Y精度','Measured sampling pitch'),
     'quick':('快速估算','Quick estimate'),'thin_lens':('专业计算','Professional'),
     'custom':('自定义 / 已连接设备','Custom / connected device'),

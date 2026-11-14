@@ -326,10 +326,21 @@ def verify_package(report_path):
             report['sol_apply_adapter_available']=True
             toolbox.select_page(3);camera_page=toolbox.camera
             camera_page.recalculate();metrics=camera_page.plan['metrics']
+            if not metrics['frequency_pending'] or metrics['line_triggers_per_cycle'] is not None or not camera_page.plan['blocking']:
+                raise RuntimeError('Missing cycle measurement must leave automatic factors pending')
+            if any(n['key'] in ('PreDivider','Multiplier','PostDivider') for n in camera_page.plan['nodes']):
+                raise RuntimeError('Uncalibrated automatic factors leaked into camera nodes')
+            camera_page.controls['cycle_travel_mm'].setValue(429.6875);camera_page.recalculate();metrics=camera_page.plan['metrics']
             if (metrics['width'],metrics['height'],metrics['product_height_lines'],metrics['cycle_idle_available'])!=(2048,3800,3724,200) or metrics['lines_per_product']!=4000 or camera_page.write_button.isEnabled():
                 raise RuntimeError('Frozen camera calculation or write guard failed')
             if camera_page.plan['settings']['multiplier']!=4:raise RuntimeError('Cycle capacity multiplier failed')
-            report['camera_cycle_capacity']=True
+            from camera_model import CameraSettings,calculate
+            fraction=calculate(CameraSettings(precision_source='precision',line_y_source='square',sensor_width=2048,
+                target_width_mm=40,target_length_mm=60,x_mm_per_px=.02,y_mm_per_px=.02,products_per_minute=300,
+                frequency_strategy='cycle',auto_frequency=True,cycle_travel_mm=90))
+            if fraction['blocking'] or fraction['metrics']['frequency_solution']['ratio']!=4.5 or fraction['metrics']['material_height_px']!=3000:
+                raise RuntimeError('Measured cycle must solve fractional factors without changing target sampling')
+            report['camera_cycle_capacity']=True;report['camera_measured_cycle']=True
             if camera_page.controls['working_distance_mm'].isHidden() or not camera_page.controls['working_distance_mm'].isEnabled() or not camera_page.controls['framing_source'].isHidden():
                 raise RuntimeError('Frozen automatic camera input layout failed')
             if (metrics['material_width_px'],metrics['material_height_px'])!=(1862,3724):

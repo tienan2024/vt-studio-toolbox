@@ -215,16 +215,35 @@ def calculate(settings,limits=None):
         dx=s.pixel_pitch_um/1000*object_distance/s.focal_length_mm
     fov_x=dx*s.sensor_width
     if s.framing_source=='distance':target_fov_w=fov_x
+    cycle=s.kind=='line' and s.frequency_strategy=='cycle'
+    cycle_calibrated=cycle and s.cycle_travel_mm>0
+    cycle_pending=cycle and s.auto_frequency and not cycle_calibrated
+    counts=s.ppr*s.edge_factor*s.encoder_revs if s.kind=='line' else None
     lines=s.ppr*s.edge_factor*s.encoder_revs*s.multiplier/(s.pre_divider*s.post_divider) if s.kind=='line' else None
     dy=s.y_mm_per_px if lines is not None else (s.fov_height_mm/s.sensor_height if s.precision_source=='fov' else s.y_mm_per_px)
     if s.kind=='line':
         if s.line_y_source=='calibration':dy=s.calibration_length_mm/s.calibration_rows
         elif s.line_y_source=='square':
-            dy=dx;warnings.append('Y精度按方形像素规划，尚未证明编码器实际采样一致；请用原始产品图标定核对。')
+            dy=dx
+            if not cycle_calibrated:warnings.append('Y精度按方形像素规划，尚未证明编码器实际采样一致；请用原始产品图标定核对。')
         elif s.line_y_source=='legacy':blocking.append('旧配置已迁移：Y精度来自旧产品节距换算，请在工位标定中选择并确认新的Y精度来源后再写入。')
-    cycle=s.kind=='line' and s.frequency_strategy=='cycle'
     if cycle:dy=dx
     frequency_solution=None;target_dy=dy
+    if cycle:
+        if cycle_calibrated:
+            if s.auto_frequency:
+                from camera_frequency import solve_frequency
+                frequency_solution=solve_frequency(s.cycle_travel_mm/(counts*target_dy),limits)
+                frequency_solution['strategy']='measured_cycle'
+                s=replace(s,**{key:frequency_solution[key] for key in ('pre_divider','multiplier','post_divider')})
+                lines=counts*frequency_solution['ratio']
+                if not frequency_solution['limits_verified']:warnings.append('倍分频使用离线参考范围，连接后按设备范围核对。')
+            dy=s.cycle_travel_mm/lines
+            if abs(100*(dy/target_dy-1))>s.frequency_tolerance_percent+1e-9:
+                blocking.append('设备倍分频不能满足目标纵向精度，请调整因子或光学精度；不能为凑够周期行数而改变采样比例。')
+        else:
+            blocking.append('请填写每周期实际走料距离，才能计算或校验倍分频及纵向精度。')
+            if cycle_pending:lines=None
     if s.kind=='line' and s.auto_frequency and not cycle:
         from camera_frequency import solve_frequency
         frequency_solution=solve_frequency(s.encoder_travel_mm_per_rev/(s.ppr*s.edge_factor*dy),limits)
@@ -248,20 +267,9 @@ def calculate(settings,limits=None):
         return int(minimum+(math.ceil if up else math.floor)((value-minimum)/step)*step)
     if not s.width_override:width=align(width,'Width')
     if not s.height_override:height=align(height,'Height')
-    if cycle and s.auto_frequency:
-        from camera_frequency import solve_cycle_capacity
-        frequency_solution=solve_cycle_capacity(height+s.cycle_idle_lines,s.ppr*s.edge_factor*s.encoder_revs,limits)
-        s=replace(s,**{key:frequency_solution[key] for key in ('pre_divider','multiplier','post_divider')})
-        lines=s.ppr*s.edge_factor*s.encoder_revs*frequency_solution['ratio']
-        if not frequency_solution['limits_verified']:warnings.append('整数倍频为离线建议，连接后按设备范围核对。')
-    if cycle:
-        if math.floor(lines+1e-8)-height<s.cycle_idle_lines:blocking.append('本周期行触发数不足以容纳图高和预留空档，请增加倍频或调整图高。')
-        warnings.append('Y精度为方形像素规划值；周期行数够用不等于实际无拉伸，请用原始产品图或周期走料标定。')
-        if s.cycle_travel_mm>0:
-            actual_dy=s.cycle_travel_mm/lines
-            if math.ceil(s.target_length_mm/actual_dy-1e-10)>height:blocking.append('实测周期走料表明产品占用行数超过当前图高，会裁掉产品，请调整方案。')
-            elif target_mode and math.ceil(target_fov_h/actual_dy-1e-10)>height:blocking.append('实测纵向采样无法在当前图高内覆盖目标视野长度及余量，请调整图高或采样。')
-            if abs(100*(actual_dy/dx-1))>s.frequency_tolerance_percent+1e-9:blocking.append('实测纵向采样与横向精度不一致，不能保证无拉伸，请校准采样或机械节拍。')
+    if cycle and lines is not None:
+        if math.floor(lines+1e-8)-height<s.cycle_idle_lines:
+            blocking.append('按实际采样计算的周期行触发数不足以容纳图高和预留空档，请调整留白、图高取整、空档或工位周期；不要直接增大倍频。')
     if s.framing_source!='legacy' and fov_x<s.target_width_mm-1e-8:blocking.append('当前工作距离对应视野小于材料宽度。')
     offset_x=(s.sensor_width-width)//2 if s.centered_x else s.offset_x
     if s.centered_x:offset_x=align(offset_x,'OffsetX',False)
@@ -284,7 +292,7 @@ def calculate(settings,limits=None):
         if s.limit_line_rate and rate<required-1e-8:blocking.append('已启用的手动行频上限低于预计外部行触发频率。')
         if s.limit_line_rate and rate<recommended and rate>=required:warnings.append('手动行频上限满足预计触发频率，但少于能力预留建议值。')
         if s.exposure_us>1_000_000/required:blocking.append('曝光时间超过预计外部行触发间隔；请按最高实际行频核对。')
-    else:
+    elif s.kind=='area':
         if s.exposure_us>60_000_000/s.products_per_minute:blocking.append('曝光时间超过产品帧周期。')
     blur=required*dy*s.exposure_us/1_000_000 if required is not None else None
     if cycle:blur=required*s.cycle_travel_mm/lines*s.exposure_us/1_000_000 if s.cycle_travel_mm>0 else None
@@ -311,10 +319,10 @@ def calculate(settings,limits=None):
         tdi=node('TDIMode','enum','Line_1');tdi['optional']=True;entries.append(tdi)
         entries.extend([node('EncoderSourceA','enum',s.encoder_line),node('EncoderSourceB','enum','NA'),
             node('EncoderOutputMode','enum','AnyDirection'),node('EncoderCounterMode','enum','IgnoreDirection'),
-            node('InputSource','enum','EncoderModuleOut'),node('PreDivider','int',s.pre_divider),
-            node('Multiplier','int',s.multiplier),node('PostDivider','int',s.post_divider),
+            node('InputSource','enum','EncoderModuleOut'),
             node('SignalAlignment','enum',s.line_edge),node('AcquisitionLineRateEnable','bool',s.limit_line_rate)])
-        if s.limit_line_rate:entries.append(node('AcquisitionLineRate','int',int(rate)))
+        if not cycle_pending:entries.extend([node('PreDivider','int',s.pre_divider),node('Multiplier','int',s.multiplier),node('PostDivider','int',s.post_divider)])
+        if s.limit_line_rate and rate is not None:entries.append(node('AcquisitionLineRate','int',int(rate)))
         context={'TriggerSelector':'LineStart'}
         entries.extend([node('TriggerSource','enum','FrequencyConverter',context),node('TriggerActivation','enum',s.line_edge,context),node('TriggerMode','enum','On',context)])
     for enabled,line,source in ((s.output0_enabled,s.output0_line,s.output0_source),(s.output4_enabled,s.output4_line,s.output4_source)):
@@ -332,13 +340,19 @@ def calculate(settings,limits=None):
         'optical_magnification':s.pixel_pitch_um/1000/dx if s.pixel_pitch_um>0 else None,
         'optics_method':s.optics_method if s.precision_source=='optics' else s.precision_source,
         'frequency_solution':frequency_solution,'target_y_mm_per_px':target_dy,
-        'y_sampling_error_percent':100*(dy/target_dy-1) if s.kind=='line' and s.auto_frequency and not cycle else None,
+        'y_sampling_error_percent':100*(dy/target_dy-1) if cycle_calibrated or (s.kind=='line' and s.auto_frequency and not cycle) else None,
+        'cycle_calibrated':cycle_calibrated,'frequency_pending':cycle_pending,
+        'input_counts_per_cycle':counts,
+        'encoder_counts_per_mm':counts/s.cycle_travel_mm if cycle_calibrated else None,
+        'material_cycle_fraction':s.target_length_mm/s.cycle_travel_mm if cycle_calibrated else None,
+        'material_encoder_counts':counts*s.target_length_mm/s.cycle_travel_mm if cycle_calibrated else None,
+        'target_cycle_line_count':s.cycle_travel_mm/target_dy if cycle_calibrated else None,
         'cycle_idle_available':math.floor(lines+1e-8)-height if lines is not None else None,
         'cycle_travel_for_square_mm':lines*dx if lines is not None else None,
         'actual_y_mm_per_px':s.cycle_travel_mm/lines if cycle and s.cycle_travel_mm>0 else None,
         'actual_product_height_lines':math.ceil(s.target_length_mm*lines/s.cycle_travel_mm-1e-10) if cycle and s.cycle_travel_mm>0 else None,
         'horizontal_margin_percent_actual':100*(fov_x/s.target_width_mm-1),
-        'effective_counts_per_product':s.ppr*s.edge_factor*s.encoder_revs if lines is not None else None,
+        'effective_counts_per_product':counts,
         'line_triggers_per_cycle':lines,'lines_per_product':lines,'required_line_rate_hz':required,'recommended_line_rate_hz':recommended,
         'product_height_lines':product_h,'vertical_margin_lines':margin_h,'background_height_lines':max(0,height-product_h),
         'material_width_px':material_w,'material_height_px':product_h,'material_pixel_count':material_w*product_h,

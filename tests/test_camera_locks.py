@@ -59,8 +59,10 @@ class CameraFixedValueTests(unittest.TestCase):
         for key,value in fixed.items():self.assertEqual(p.controls[key].value(),value)
         self.pin('horizontal_margin_percent');self.assertIsNotNone(p.plan,p.message.text())
         for key in ('working_distance_mm','target_width_mm'):self.assertEqual(p.controls[key].value(),fixed[key])
+        p.controls['cycle_travel_mm'].setValue(429.6875)
         p.geometry={'limits':{key:{'min':1,'max':1,'inc':1} for key in ('PreDivider','Multiplier','PostDivider')}}
-        p.recalculate();self.assertIsNone(p.plan)
+        p.recalculate();self.assertIsNotNone(p.plan)
+        self.assertTrue(any('纵向精度' in reason for reason in p.plan['blocking']))
         self.assertNotIn('固定值冲突',p.message.text())
 
     def test_camera_change_preserves_fixed_distance_and_explicit_load_resets_locks(self):

@@ -282,8 +282,9 @@ class CameraPage(QWidget):
         self.integer(encoder,'height_override','取图高度 / 行',0,1000000,special='自动建议')
         self.integer(encoder,'cycle_idle_lines','最少周期空档 / 行',1,1000000)
         self.integer(calibration,'height_rounding','图高取整步长 / 行',1,100000)
-        self.number(calibration,'cycle_travel_mm','实测每Z周期走料 / mm',0,1000000,6,special='未标定')
-        self.combo(calibration,'frequency_strategy','倍分频算法',[('按周期凑整数倍频','cycle'),('按实测走料匹配Y','pitch')])
+        self.number(encoder,'cycle_travel_mm','每周期实际走料 / mm',0,1000000,6,special='请填写实测距离')
+        self.controls['cycle_travel_mm'].setToolTip('测量相邻帧周期之间材料实际行进距离；结合P/R、有效计数倍率和每帧间隔圈数计算脉冲/mm。')
+        self.combo(calibration,'frequency_strategy','倍分频算法',[('按实测周期走料匹配Y','cycle'),('按实测每圈走料匹配Y','pitch')])
         self.check(image,'centered_x','X 居中');self.integer(image,'offset_x','OffsetX / px',0,65536)
         self.integer(image,'offset_y','OffsetY / px',0,65536)
         self.number(image,'line_rate_override','手动行频 / Hz',0,100000000,0,special='按产能计算')
@@ -293,6 +294,8 @@ class CameraPage(QWidget):
         station.arrange([self.controls[key] for key in ('optics_method','working_distance_mm','target_width_mm','target_length_mm',
             'horizontal_margin_percent','vertical_margin_percent')]+list(self.target_fov_fields.values())+
             [self.controls[key] for key in ('focal_length_mm','pixel_pitch_um','principal_plane_offset_mm')])
+        encoder.arrange([self.controls[key] for key in ('auto_frequency','cycle_travel_mm','ppr','edge_factor','encoder_revs',
+            'height_override','cycle_idle_lines','pre_divider','multiplier','post_divider')])
         left.addStretch(1)
         self.form_tabs.currentChanged.connect(self.schedule_input_fit)
         self.toggle_advanced(False)
@@ -630,6 +633,8 @@ class CameraPage(QWidget):
             self.controls['x_mm_per_px'].setEnabled(False)
         self.field_forms['encoder_travel_mm_per_rev'].setRowVisible(self.controls['encoder_travel_mm_per_rev'],line and not cycle)
         self.field_forms['cycle_travel_mm'].setRowVisible(self.controls['cycle_travel_mm'],cycle)
+        for key in ('pre_divider','multiplier','post_divider'):
+            self.field_forms[key].setRowVisible(self.controls[key],line and not self.controls['auto_frequency'].isChecked())
         for key in ('cycle_idle_lines','height_rounding'):self.field_forms[key].setRowVisible(self.controls[key],cycle)
         if cycle:
             for key in ('line_y_source','y_mm_per_px','calibration_length_mm','calibration_rows'):
@@ -709,6 +714,7 @@ class CameraPage(QWidget):
             ('前后背景行数',str(m['background_height_lines']),'行'),
             ('X / Y 精度',format(m['x_mm_per_px'],'.6f')+' / '+format(m['y_mm_per_px'],'.6f'),'mm/px')]
         if m['line_triggers_per_cycle'] is not None:metrics.append(('预计外部行频',format(m['required_line_rate_hz'],'.0f'),'Hz'))
+        elif plan['settings']['kind']=='line':metrics.append(('预计外部行频','待测量','Hz'))
         else:metrics.append(('产品帧频',format(m['frame_rate_hz'],'.3f'),'Hz'))
         metrics.append(self.material_pixels_row(m))
         self.fill(self.metrics,metrics)
@@ -732,25 +738,29 @@ class CameraPage(QWidget):
 
     def render_workflow(self,plan):
         self.plan=plan;s=plan['settings'];m=plan['metrics'];line=s['kind']=='line'
+        pending=m['frequency_pending'];measured=m['cycle_calibrated']
         rows=[('视野宽 / 工作距离',format(m['fov_width_mm'],'.3f')+' / '+format(m['working_distance_mm'],'.3f'),'mm'),
-              ('方形像素规划' if line else '光学像素精度',format(m['x_mm_per_px'],'.9f'),'mm/px'),
-              ('产品最少行数',str(m['product_height_lines']),'行'),
+              ('实际精度 X / Y' if measured else '方形像素规划' if line else '光学像素精度',
+               format(m['x_mm_per_px'],'.6f')+' / '+format(m['y_mm_per_px'],'.6f') if measured else format(m['x_mm_per_px'],'.9f'),'mm/px'),
+              ('材料目标行数' if line else '产品最少行数',str(m['square_pixel_product_lines'] if line else m['product_height_lines']),'行'),
               self.material_pixels_row(m),
               ('取图宽 × 高',str(m['width'])+' × '+str(m['height']),'px')]
         if line:
-            rows.extend([('预分 / 倍频 / 后分',str(s['pre_divider'])+' / '+str(s['multiplier'])+' / '+str(s['post_divider']),''),
-                         ('Z周期总行触发',format(m['line_triggers_per_cycle'],'.6g'),'次'),
-                         ('周期剩余空档',str(m['cycle_idle_available']),'行')])
+            rows.extend([('预分 / 倍频 / 后分','待测量' if pending else str(s['pre_divider'])+' / '+str(s['multiplier'])+' / '+str(s['post_divider']),''),
+                         ('周期总行触发','待测量' if pending else format(m['line_triggers_per_cycle'],'.6g'),'次'),
+                         ('周期剩余空档','待测量' if pending else str(m['cycle_idle_available']),'行')])
         else:rows.append(('产品帧频',format(m['frame_rate_hz'],'.3f'),'Hz'))
         self.fill(self.metrics,rows);self.set_material_pixels_tooltip(3,m);self.fit_metrics();self.frame_preview.plan=plan;self.frame_preview.update()
         self.fill(self.node_table,[[', '.join(n['selectors'].values()) or '全局',n['key'],n['value']] for n in plan['nodes']])
         self.optics_summary.show()
-        text='实际覆盖 '+format(m['coverage_width_mm'],'.3f')+' × '+format(m['coverage_height_mm'],'.3f')+' mm · 图内背景 '+str(m['background_height_lines'])+' 行'
-        if line:text+=' · 有效A计数 '+format(m['effective_counts_per_product'],'.6g')+' / 周期 · 预计行频 '+format(m['required_line_rate_hz'],'.0f')+' Hz'
+        text=('规划覆盖 ' if line and s['frequency_strategy']=='cycle' and not measured else '实际覆盖 ')+format(m['coverage_width_mm'],'.3f')+' × '+format(m['coverage_height_mm'],'.3f')+' mm · 图内背景 '+str(m['background_height_lines'])+' 行'
+        if measured:text+='\n材料占周期 '+format(m['material_cycle_fraction']*100,'.2f')+'% · 输入 '+format(m['encoder_counts_per_mm'],'.3f')+' 脉冲/mm · 预计行频 '+format(m['required_line_rate_hz'],'.0f')+' Hz'
+        elif pending:text+='\n填写实测周期走料后，自动计算脉冲/mm和倍分频。'
+        elif line:text+=' · 预计行频 '+format(m['required_line_rate_hz'],'.0f')+' Hz'
         self.optics_summary.setText(text)
         if plan['blocking']:message='；'.join(plan['blocking'])
-        elif line and s['frequency_strategy']=='cycle':
-            message='周期容量规划；Y采样'+('已提供走料标定。' if m['actual_y_mm_per_px'] else '尚未实测标定。')+' 前后留白位置由下位机相位调整。'
+        elif measured:
+            message='按实测走料计算采样比例；图高与周期空档单独校验。前后位置仍由下位机相位调整。'
         else:message='按当前视野计算；镜头模型值请用实测视野核对。'
         self.summary.setText(message);self.summary.setToolTip('\n'.join(plan['blocking']+plan['warnings']))
 
@@ -788,7 +798,8 @@ class CameraPage(QWidget):
                 self.sync_frequency(plan);plan=calculate(self.settings(),limits)
             for key,field in self.target_fov_fields.items():field.setText(format(plan['metrics'][key],'.3f'))
             self.render_plan(plan);self.update_actions()
-            self.notify('；'.join(self.plan['blocking']) if self.plan['blocking'] else '',bool(self.plan['blocking']))
+            self.notify('；'.join(self.plan['blocking']) if self.plan['blocking'] else '',bool(self.plan['blocking']) and not (
+                self.plan['metrics']['frequency_pending'] and len(self.plan['blocking'])==1))
             return self.plan
         except Exception as exc:
             self.plan=None;self.metrics.setRowCount(0);self.frame_preview.plan=None;self.frame_preview.update();self.summary.clear();self.optics_summary.clear()

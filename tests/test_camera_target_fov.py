@@ -18,7 +18,7 @@ class TargetFovTests(unittest.TestCase):
             self.assertEqual(inverse['material_pixel_count'],1862*3724)
 
     def test_two_margins_drive_height_and_cycle_capacity(self):
-        settings=workflow_settings();settings.vertical_margin_percent=10
+        settings=workflow_settings();settings.vertical_margin_percent=10;settings.cycle_travel_mm=537.109375
         plan=calculate(settings);m=plan['metrics']
         self.assertAlmostEqual(m['target_fov_width_mm'],220.)
         self.assertAlmostEqual(m['target_fov_height_mm'],440.)
@@ -34,8 +34,14 @@ class TargetFovTests(unittest.TestCase):
         settings=workflow_settings();m=calculate(settings)['metrics']
         self.assertEqual(m['target_fov_height_mm'],408)
         self.assertEqual(m['height'],3800)
+        self.assertTrue(m['frequency_pending'])
         settings.cycle_travel_mm=429.2
-        self.assertTrue(any('目标视野长度' in reason for reason in calculate(settings)['blocking']))
+        self.assertLess(abs(calculate(settings)['metrics']['y_sampling_error_percent']),settings.frequency_tolerance_percent)
+        settings.cycle_travel_mm=429.6875;settings.vertical_margin_percent=10
+        measured=calculate(settings)
+        self.assertEqual(measured['settings']['multiplier'],4)
+        self.assertTrue(any('空档' in reason for reason in measured['blocking']))
+        settings.vertical_margin_percent=2
         settings.cycle_travel_mm=0
         old=config_dict(settings);old.pop('vertical_margin_percent');old['image_vertical_margin_mm']=12
         restored=settings_from_dict(old);m=calculate(restored)['metrics']

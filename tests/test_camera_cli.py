@@ -20,6 +20,11 @@ class CameraCLITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             config=Path(folder)/'camera.json';plan=Path(folder)/'plan.json'
             self.cli('camera-template','--output',config)
+            pending=self.cli('camera-plan','--config',config,code=1)['data']
+            self.assertTrue(pending['metrics']['frequency_pending'])
+            self.assertIsNone(pending['metrics']['line_triggers_per_cycle'])
+            data=json.loads(config.read_text(encoding='utf-8'));data['cycle_travel_mm']=429.6875
+            config.write_text(json.dumps(data),encoding='utf-8')
             result=self.cli('camera-plan','--config',config,'--output',plan)['data']
             self.assertEqual(result['metrics']['lines_per_product'],4000);self.assertEqual(result['metrics']['recommended_line_rate_hz'],23000)
             self.assertEqual(json.loads(plan.read_text(encoding='utf-8')),result)
