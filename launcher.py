@@ -330,6 +330,17 @@ def verify_package(report_path):
                 raise RuntimeError('Frozen camera calculation or write guard failed')
             if camera_page.plan['settings']['multiplier']!=4:raise RuntimeError('Cycle capacity multiplier failed')
             report['camera_cycle_capacity']=True
+            if camera_page.controls['working_distance_mm'].isHidden() or not camera_page.controls['working_distance_mm'].isEnabled() or not camera_page.controls['framing_source'].isHidden():
+                raise RuntimeError('Frozen automatic camera input layout failed')
+            if (metrics['material_width_px'],metrics['material_height_px'])!=(1862,3724):
+                raise RuntimeError('Frozen material pixel calculation failed')
+            camera_page.controls['working_distance_mm'].setValue(200);camera_page.recalculate()
+            if camera_page.settings().framing_source!='distance' or abs(camera_page.controls['horizontal_margin_percent'].value()-19.47)>.001:
+                raise RuntimeError('Frozen distance edit did not calculate FOV and margin')
+            camera_page.controls['horizontal_margin_percent'].setValue(10);camera_page.recalculate()
+            if camera_page.settings().framing_source!='material' or abs(camera_page.controls['working_distance_mm'].value()-184.152)>.001:
+                raise RuntimeError('Frozen margin edit did not calculate distance')
+            report.update(camera_auto_reciprocal=True,camera_material_pixels=True)
             from camera_model import CameraSettings
             camera_page.load_settings(CameraSettings(kind='area',target_length_mm=120,frame_selector='FrameStart'))
             if any(n['key']=='PreDivider' for n in camera_page.plan['nodes']) or camera_page.controls['ppr'].isEnabled():

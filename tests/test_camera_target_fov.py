@@ -5,6 +5,18 @@ from camera_model import workflow_settings,calculate,config_dict,settings_from_d
 
 
 class TargetFovTests(unittest.TestCase):
+    def test_material_pixels_exclude_margins_and_distance_is_reversible(self):
+        settings=workflow_settings();m=calculate(settings)['metrics']
+        self.assertEqual((m['material_width_px'],m['material_height_px']),(1862,3724))
+        self.assertEqual(m['material_pixel_count'],1862*3724)
+        for method in ('quick','thin_lens'):
+            settings.optics_method=method;settings.framing_source='material';m=calculate(settings)['metrics']
+            settings.framing_source='distance';settings.working_distance_mm=m['working_distance_mm']
+            inverse=calculate(settings)['metrics']
+            self.assertAlmostEqual(inverse['fov_width_mm'],220)
+            self.assertAlmostEqual(inverse['horizontal_margin_percent_actual'],10)
+            self.assertEqual(inverse['material_pixel_count'],1862*3724)
+
     def test_two_margins_drive_height_and_cycle_capacity(self):
         settings=workflow_settings();settings.vertical_margin_percent=10
         plan=calculate(settings);m=plan['metrics']

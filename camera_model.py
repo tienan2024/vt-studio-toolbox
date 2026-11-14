@@ -108,7 +108,9 @@ class CameraSettings:
         if self.optics_direction not in ('wd_to_precision','precision_to_wd'):raise CameraError('工作距离与精度的计算方向无效。')
         if self.optics_method not in ('quick','thin_lens'):raise CameraError('光学计算模式无效。')
         if self.framing_source not in ('legacy','material','distance') or self.frequency_strategy not in ('pitch','cycle'):raise CameraError('视野或倍分频计算方式无效。')
-        if not 0<=self.horizontal_margin_percent<=1000 or self.height_rounding<1 or self.cycle_idle_lines<0 or self.cycle_travel_mm<0:raise CameraError('余量、图高步长或周期参数无效。')
+        margin_valid=(self.horizontal_margin_percent>=-100 if self.framing_source=='distance' else
+                      self.horizontal_margin_percent>-100 if self.framing_source=='material' else 0<=self.horizontal_margin_percent<=1000)
+        if not margin_valid or self.height_rounding<1 or self.cycle_idle_lines<0 or self.cycle_travel_mm<0:raise CameraError('余量、图高步长或周期参数无效。')
         if self.vertical_margin_percent!=-1 and not 0<=self.vertical_margin_percent<=1000:raise CameraError('纵向余量应在0～1000%，旧配置兼容值为-1。')
         if self.kind=='line' and self.frequency_strategy=='cycle' and self.cycle_idle_lines<1:raise CameraError('周期方案必须预留至少1行的采集空档。')
         if self.framing_source!='legacy' and (self.pixel_pitch_um<=0 or self.focal_length_mm<=0):raise CameraError('视野计算需要有效的像元尺寸和焦距。')
@@ -233,6 +235,7 @@ def calculate(settings,limits=None):
         if not frequency_solution['limits_verified']:warnings.append('倍分频使用离线规划范围1～256，连接相机后须按真实范围重算；不是设备支持保证。')
     if s.kind=='area' and (s.precision_source=='optics' or s.framing_source!='legacy'):dy=dx
     product_h=math.ceil(s.target_length_mm/dy-1e-10)
+    material_w=math.ceil(s.target_width_mm/dx-1e-10)
     target_mode=s.framing_source!='legacy' and s.vertical_margin_percent>=0
     margin_h=math.ceil((target_fov_h-s.target_length_mm)/dy-1e-10)
     needed_w=s.sensor_width if s.framing_source!='legacy' else math.ceil(target_fov_w/dx-1e-10)
@@ -338,6 +341,7 @@ def calculate(settings,limits=None):
         'effective_counts_per_product':s.ppr*s.edge_factor*s.encoder_revs if lines is not None else None,
         'line_triggers_per_cycle':lines,'lines_per_product':lines,'required_line_rate_hz':required,'recommended_line_rate_hz':recommended,
         'product_height_lines':product_h,'vertical_margin_lines':margin_h,'background_height_lines':max(0,height-product_h),
+        'material_width_px':material_w,'material_height_px':product_h,'material_pixel_count':material_w*product_h,
         'average_image_line_rate_hz':s.products_per_minute/60*height,'line_y_source':s.line_y_source if s.kind=='line' else 'optical',
         'square_pixel_product_lines':math.ceil(s.target_length_mm/dx-1e-10),'required_image_height':needed_h,
         'width':width,'height':height,'offset_x':offset_x,'offset_y':s.offset_y if s.kind=='area' else 0,

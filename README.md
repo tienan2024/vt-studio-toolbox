@@ -1,6 +1,6 @@
-# VT STUDIO 图像工具箱 · 7.7.1
+# VT STUDIO 图像工具箱 · 7.8.0
 
-最后更新：2026-11-13
+最后更新：2026-11-14
 
 一个窗口整合 **尺寸与原点**、**缺陷合成**、**VM脚本生成/测试** 与 **相机参数**。统一导航、预览和导出，模块切换保留状态。无需账号、GPU 或网络服务。
 
@@ -8,9 +8,9 @@
 
 ## 打开工具
 
-GitHub仓库：[tienan2024/vt-studio-toolbox](https://github.com/tienan2024/vt-studio-toolbox)。6.5使用矩形XML；7.7.1包含多边形XML、脚本生成/测试、SOL应用和相机参数，发布版本以Release版本号为准。直接使用请从 [Releases](https://github.com/tienan2024/vt-studio-toolbox/releases) 下载Windows便携包，解压后运行VTStudioToolbox.exe；VTStudioCLI.exe供AI与脚本调用。源码仓库包含必要的原转换核心，不包含Python环境、生产图片、本机验证目录或构建产物。
+GitHub仓库：[tienan2024/vt-studio-toolbox](https://github.com/tienan2024/vt-studio-toolbox)。6.5使用矩形XML；7.8.0包含多边形XML、脚本生成/测试、SOL应用和相机参数，发布版本以Release版本号为准。直接使用请从 [Releases](https://github.com/tienan2024/vt-studio-toolbox/releases) 下载Windows便携包，解压后运行VTStudioToolbox.exe；VTStudioCLI.exe供AI与脚本调用。源码仓库包含必要的原转换核心，不包含Python环境、生产图片、本机验证目录或构建产物。
 
-优先双击桌面“VT STUDIO 工具箱”快捷方式。7.7.1独立包位于 `D:/CodexBuilds/vt-studio-toolbox/7.7.1/VTStudioToolbox/VTStudioToolbox.exe`（源码的release/7.7.1入口通过目录联接保留），启动脚本优先打开新版，旧窗口和旧包保留。便携版需保留整个文件夹及_internal，不能只复制EXE。
+优先双击桌面“VT STUDIO 工具箱”快捷方式。7.8.0独立包位于 `D:/CodexBuilds/vt-studio-toolbox/7.8.0/VTStudioToolbox/VTStudioToolbox.exe`（源码的release/7.8.0入口通过目录联接保留），启动脚本优先打开新版，旧窗口和旧包保留。便携版需保留整个文件夹及_internal，不能只复制EXE。
 
 源码启动：
 
@@ -33,7 +33,7 @@ python app.py
 
 ## 相机参数
 
-7.7相机页采用工作条件交互输入：左上选择相机及固定镜头，“材料与视野”“编码器与图高”用双列输入，输入提交后自动计算其余值。材料宽长分别加横向、纵向百分比余量，生成只读的目标视野宽度和长度；后续工作距离、精度和图高以目标视野为依据。默认200×400mm、横向10%、纵向2%，得到目标220×408mm、2K图高3800行及4倍频。改纵向10%时为220×440mm、4100行及5倍频。面阵同时满足宽长覆盖并保持像素比例。更多参数紧邻表单，不再撑大属性表空白；数字IO保持MVS属性表，线扫有帧/行触发，面阵只有帧触发，支持中文/English选项显示。
+7.8相机页按最后编辑的数据自动互逆计算，无需选择方向：改工作距离，计算横向视野和余量；改材料宽长、余量或光学参数，先算目标视野再反算距离。工作距离始终显示且可直接编辑，结果回填不会反向触发。结果增加不含余量的“材料像素（宽×高）”，默认1862×3724px，与整张2048×3800px区分。横纵余量仍分别设置，目标视野宽长自动显示；图高及倍频继续按目标视野和周期空档计算。
 
 一帧一个产品，线扫按外部行触发采满Height后结束本帧，无需产品间距。线扫Y精度支持已知值、产品长度/实测行数标定或明确标注的方形像素规划；下位机负责相位。旧相机配置可迁移，旧线扫Y来源需确认后才可写入。四个工作区共用细箭头下拉列表、数字输入、焦点/禁用态及紧凑表格编辑样式。
 

@@ -275,9 +275,9 @@ class CameraPage(QWidget):
         self.check(image,'limit_line_rate','启用手动行频')
         self.check(image,'require_square','要求方形像素');self.number(image,'square_tolerance_percent','X/Y 允许差异 / %',0,100,2)
         self.advanced_button=self.button('更多参数',lambda:None,left);self.advanced_button.setCheckable(True);self.advanced_button.toggled.connect(self.toggle_advanced)
-        station.arrange([self.controls[key] for key in ('framing_source','optics_method','target_width_mm','target_length_mm',
+        station.arrange([self.controls[key] for key in ('optics_method','working_distance_mm','target_width_mm','target_length_mm',
             'horizontal_margin_percent','vertical_margin_percent')]+list(self.target_fov_fields.values())+
-            [self.controls[key] for key in ('working_distance_mm','focal_length_mm','pixel_pitch_um','principal_plane_offset_mm')])
+            [self.controls[key] for key in ('focal_length_mm','pixel_pitch_um','principal_plane_offset_mm')])
         left.addStretch(1)
         self.form_tabs.currentChanged.connect(self.schedule_input_fit)
         self.toggle_advanced(False)
@@ -335,17 +335,17 @@ class CameraPage(QWidget):
     def number(self,form,key,label,low,high,decimals,special=None):
         widget=QDoubleSpinBox();widget.setDecimals(decimals);widget.setRange(low,high);widget.setKeyboardTracking(False)
         if special:widget.setSpecialValueText(special)
-        self.register(form,key,label,widget);widget.valueChanged.connect(self.changed)
+        self.register(form,key,label,widget);widget.valueChanged.connect(lambda _,key=key:self.parameter_changed(key))
 
     def integer(self,form,key,label,low,high,special=None):
         widget=QSpinBox();widget.setRange(low,high);widget.setKeyboardTracking(False)
         if special:widget.setSpecialValueText(special)
-        self.register(form,key,label,widget);widget.valueChanged.connect(self.changed)
+        self.register(form,key,label,widget);widget.valueChanged.connect(lambda _,key=key:self.parameter_changed(key))
 
     def combo(self,form,key,label,items,editable=False):
         widget=self.styled_combo();widget.setEditable(editable)
         for text,value in items:widget.addItem(text,value)
-        self.register(form,key,label,widget);widget.currentIndexChanged.connect(self.changed)
+        self.register(form,key,label,widget);widget.currentIndexChanged.connect(lambda _,key=key:self.parameter_changed(key))
         if editable:widget.editTextChanged.connect(self.changed)
 
     @staticmethod
@@ -376,6 +376,7 @@ class CameraPage(QWidget):
         if not preset:
             s=self.settings(validate=False);s.camera_model_id='';self.load_settings(s);return
         s=self.settings(validate=False)
+        if s.framing_source!='legacy':s.framing_source='material'
         for key in ('kind','sensor_width','sensor_height','pixel_pitch_um'):setattr(s,key,preset[key])
         s.camera_model_id=preset['model'];s.focal_length_mm=preset['focal_length_mm'];s.pixel_format='Mono8' if not preset['color'] else ''
         s.width_override=s.height_override=0;s.centered_x=True;s.offset_x=s.offset_y=0
@@ -486,6 +487,17 @@ class CameraPage(QWidget):
         result=CameraSettings(**values)
         return result.validate() if validate else result
 
+    def parameter_changed(self,key):
+        if self._loading:return
+        selector=self.controls['framing_source']
+        if selector.currentData()!='legacy':
+            source=('distance' if key=='working_distance_mm' else 'material' if key in
+                    ('target_width_mm','target_length_mm','horizontal_margin_percent','vertical_margin_percent',
+                     'optics_method','focal_length_mm','pixel_pitch_um','principal_plane_offset_mm','sensor_width','sensor_height') else None)
+            if source is not None:
+                blocked=selector.blockSignals(True);selector.setCurrentIndex(selector.findData(source));selector.blockSignals(blocked)
+        self.changed()
+
     def changed(self,*args):
         if self._loading:return
         self.preview=None;self.write_button.setEnabled(False);self.timer.start(180)
@@ -526,15 +538,19 @@ class CameraPage(QWidget):
         self.controls['strobe_duration_us'].setEnabled(self.controls['output4_enabled'].isChecked())
         self.trigger_help.setText(('Frame trigger only. Default input: Line0.' if self.language=='en' else '面阵仅使用帧触发；默认 Line0，可按实际接线选择。') if not line else ('Frame: Line3. Line input: Line1 via encoder and frequency converter.' if self.language=='en' else '帧触发 Line3；行输入 Line1，经编码器与自动推荐的倍分频。'))
         framing=self.controls['framing_source'].currentData();workflow=framing!='legacy';cycle=line and self.controls['frequency_strategy'].currentData()=='cycle'
-        self.controls['working_distance_mm'].setEnabled(framing=='distance' if workflow else optics and not inverse)
-        self.controls['horizontal_margin_percent'].setEnabled(framing=='material')
+        self.field_forms['framing_source'].setRowVisible(self.controls['framing_source'],False)
+        margin=self.controls['horizontal_margin_percent'];blocked=margin.blockSignals(True)
+        margin.setRange(-100 if workflow else 0,1e15 if workflow else 1000)
+        margin.blockSignals(blocked)
+        self.controls['working_distance_mm'].setEnabled(workflow or (optics and not inverse))
+        self.controls['horizontal_margin_percent'].setEnabled(workflow)
         self.field_forms['horizontal_margin_percent'].setRowVisible(self.controls['horizontal_margin_percent'],workflow)
         self.field_forms['vertical_margin_percent'].setRowVisible(self.controls['vertical_margin_percent'],workflow)
         for field in self.target_fov_fields.values():self.parameter_form.setRowVisible(field,workflow)
         for key in ('image_horizontal_margin_mm','image_vertical_margin_mm'):
             self.field_forms[key].setRowVisible(self.controls[key],not workflow)
         if workflow:
-            self.field_forms['working_distance_mm'].setRowVisible(self.controls['working_distance_mm'],framing=='distance')
+            self.field_forms['working_distance_mm'].setRowVisible(self.controls['working_distance_mm'],True)
             self.field_forms['focal_length_mm'].setRowVisible(self.controls['focal_length_mm'],not known)
             self.controls['x_mm_per_px'].setEnabled(False)
         self.field_forms['encoder_travel_mm_per_rev'].setRowVisible(self.controls['encoder_travel_mm_per_rev'],line and not cycle)
@@ -600,6 +616,15 @@ class CameraPage(QWidget):
             for j,value in enumerate(row):
                 text=str(value);item=QTableWidgetItem(text);item.setToolTip(text);table.setItem(i,j,item)
 
+    @staticmethod
+    def material_pixels_row(metrics):
+        return ('材料像素（宽 × 高）',str(metrics['material_width_px'])+' × '+str(metrics['material_height_px']),'px')
+
+    def set_material_pixels_tooltip(self,row,metrics):
+        text=('按材料宽长除以当前X/Y精度后向上取整，不含余量；矩形规划共 '+format(metrics['material_pixel_count'],',')+
+              ' 像素。线扫Y未标定时为规划值。')
+        for column in range(3):self.metrics.item(row,column).setToolTip(text)
+
     def render_plan(self,plan):
         if plan['settings']['framing_source']!='legacy':return self.render_workflow(plan)
         self.plan=plan;m=plan['metrics']
@@ -609,7 +634,9 @@ class CameraPage(QWidget):
             ('X / Y 精度',format(m['x_mm_per_px'],'.6f')+' / '+format(m['y_mm_per_px'],'.6f'),'mm/px')]
         if m['line_triggers_per_cycle'] is not None:metrics.append(('预计外部行频',format(m['required_line_rate_hz'],'.0f'),'Hz'))
         else:metrics.append(('产品帧频',format(m['frame_rate_hz'],'.3f'),'Hz'))
+        metrics.append(self.material_pixels_row(m))
         self.fill(self.metrics,metrics)
+        self.set_material_pixels_tooltip(len(metrics)-1,m)
         self.fit_metrics()
         self.frame_preview.plan=plan;self.frame_preview.update()
         self.fill(self.node_table,[[', '.join(n['selectors'].values()) or '全局',n['key'],n['value']] for n in plan['nodes']])
@@ -632,13 +659,14 @@ class CameraPage(QWidget):
         rows=[('视野宽 / 工作距离',format(m['fov_width_mm'],'.3f')+' / '+format(m['working_distance_mm'],'.3f'),'mm'),
               ('方形像素规划' if line else '光学像素精度',format(m['x_mm_per_px'],'.9f'),'mm/px'),
               ('产品最少行数',str(m['product_height_lines']),'行'),
+              self.material_pixels_row(m),
               ('取图宽 × 高',str(m['width'])+' × '+str(m['height']),'px')]
         if line:
             rows.extend([('预分 / 倍频 / 后分',str(s['pre_divider'])+' / '+str(s['multiplier'])+' / '+str(s['post_divider']),''),
                          ('Z周期总行触发',format(m['line_triggers_per_cycle'],'.6g'),'次'),
                          ('周期剩余空档',str(m['cycle_idle_available']),'行')])
         else:rows.append(('产品帧频',format(m['frame_rate_hz'],'.3f'),'Hz'))
-        self.fill(self.metrics,rows);self.fit_metrics();self.frame_preview.plan=plan;self.frame_preview.update()
+        self.fill(self.metrics,rows);self.set_material_pixels_tooltip(3,m);self.fit_metrics();self.frame_preview.plan=plan;self.frame_preview.update()
         self.fill(self.node_table,[[', '.join(n['selectors'].values()) or '全局',n['key'],n['value']] for n in plan['nodes']])
         self.optics_summary.show()
         text='实际覆盖 '+format(m['coverage_width_mm'],'.3f')+' × '+format(m['coverage_height_mm'],'.3f')+' mm · 图内背景 '+str(m['background_height_lines'])+' 行'
@@ -662,7 +690,7 @@ class CameraPage(QWidget):
                 blocked=widget.blockSignals(True);widget.setValue(value);widget.blockSignals(blocked)
                 if plan['settings']['framing_source']=='distance':
                     widget=self.controls['horizontal_margin_percent'];blocked=widget.blockSignals(True)
-                    widget.setValue(max(0,plan['metrics']['horizontal_margin_percent_actual']));widget.blockSignals(blocked)
+                    widget.setValue(plan['metrics']['horizontal_margin_percent_actual']);widget.blockSignals(blocked)
                 plan=calculate(self.settings(),limits)
             elif plan['settings']['precision_source']=='optics':
                 key='working_distance_mm' if plan['settings']['optics_direction']=='precision_to_wd' else 'x_mm_per_px'

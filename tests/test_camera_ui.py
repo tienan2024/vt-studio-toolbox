@@ -38,8 +38,8 @@ class CameraDesktopTests(unittest.TestCase):
     def test_simple_default_and_reveal_settings_details_and_camera_actions(self):
         w=ToolboxWindow();w.show();w.select_page(3);p=w.camera;self.app.processEvents()
         try:
-            self.assertEqual(p.metrics.rowCount(),7);self.assertFalse(p.form_tabs.isTabVisible(p.basic_tab_count))
-            self.assertGreaterEqual(p.metrics.viewport().height(),sum(p.metrics.rowHeight(i) for i in range(7)))
+            self.assertEqual(p.metrics.rowCount(),8);self.assertFalse(p.form_tabs.isTabVisible(p.basic_tab_count))
+            self.assertGreaterEqual(p.metrics.viewport().height(),sum(p.metrics.rowHeight(i) for i in range(8)))
             # Qt frame borders may share up to two logical pixels at fractional DPI.
             self.assertLessEqual(p.metrics.geometry().bottom(),p.optics_summary.geometry().top()+2)
             self.assertTrue(p.devices_bar.isHidden());self.assertTrue(p.device_actions.isHidden());self.assertTrue(p.tabs.isHidden())
@@ -62,10 +62,10 @@ class CameraDesktopTests(unittest.TestCase):
     def test_styled_controls_keep_popup_selection_and_distinct_plus_minus_hit_targets(self):
         w=ToolboxWindow();w.show();w.select_page(3);p=w.camera;self.app.processEvents()
         try:
-            combo=p.controls['framing_source'];combo.showPopup();self.app.processEvents()
+            combo=p.controls['optics_method'];combo.showPopup();self.app.processEvents()
             self.assertTrue(combo.view().isVisible());self.assertGreaterEqual(combo.view().sizeHintForRow(0),32)
             QTest.keyClick(combo,Qt.Key.Key_Down);QTest.keyClick(combo,Qt.Key.Key_Return);self.app.processEvents()
-            self.assertEqual(combo.currentData(),'distance');p.recalculate()
+            self.assertEqual(combo.currentData(),'thin_lens');p.recalculate()
             spin=p.controls['target_width_mm'];option=QStyleOptionSpinBox();spin.initStyleOption(option)
             up=spin.style().subControlRect(QStyle.ComplexControl.CC_SpinBox,option,QStyle.SubControl.SC_SpinBoxUp,spin)
             down=spin.style().subControlRect(QStyle.ComplexControl.CC_SpinBox,option,QStyle.SubControl.SC_SpinBoxDown,spin)
