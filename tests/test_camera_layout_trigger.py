@@ -36,7 +36,7 @@ class CameraLayoutTriggerTests(unittest.TestCase):
             self.assertEqual(len({w.size().toTuple() for w in (p.language_box,p.connection_button,p.files_button)}),1)
         p.form_tabs.setCurrentIndex(2);self.settle()
         self.assertEqual(p.line_trigger_source.currentData(),'FrequencyConverter')
-        self.assertFalse(p.line_trigger_source.isEnabled());self.assertTrue(p.controls['encoder_line'].isVisible())
+        self.assertTrue(p.line_trigger_source.isEnabled());self.assertTrue(p.controls['encoder_line'].isVisible())
         p.controls['encoder_line'].setCurrentIndex(p.controls['encoder_line'].findData('Line2'));p.recalculate()
         entries={(n['key'],n['selectors'].get('TriggerSelector')):n['value'] for n in p.plan['nodes']}
         self.assertEqual(entries['EncoderSourceA',None],'Line2')

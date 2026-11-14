@@ -26,6 +26,9 @@ for _key,_p in PRESETS.items():
     _p['focal_length_mm']=LENSES[_p['lens_model']]['focal_length_mm']
 
 LABELS={
+    'FrequencyConverter':('频率转换器输出','Frequency converter output'),
+    'EncoderModuleOut':('编码器模块输出','Encoder module output'),
+    'Software':('软触发','Software trigger'),
     'material':('材料宽度 → 工作距离','Material → distance'),
     'distance':('工作距离 → 视野','Distance → FOV'),
     'cycle':('按实测周期走料匹配Y','Measured cycle travel'),

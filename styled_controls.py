@@ -72,7 +72,7 @@ def style_control(widget):
             view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
             popup=view.window();popup.setObjectName('ToolboxPopup')
             popup.setStyleSheet('QWidget#ToolboxPopup { background:#ffffff; color:#263548; border:0; }')
-    compact=_inside(widget,QAbstractItemView) or widget.maximumWidth()<=140
+    compact=not widget.property('vtRegularHeight') and (_inside(widget,QAbstractItemView) or widget.maximumWidth()<=140)
     if isinstance(widget,QAbstractSpinBox):
         no_buttons=widget.buttonSymbols()==QAbstractSpinBox.ButtonSymbols.NoButtons
         if widget.property('vtNoButtons')!=no_buttons:

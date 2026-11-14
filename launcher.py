@@ -351,6 +351,16 @@ def verify_package(report_path):
                 raise RuntimeError('Line trigger UI must show frequency converter output')
             camera_page.connection_button.setChecked(False)
             report.update(camera_connection_layout=True,camera_line_source=True)
+            from camera_presets import CameraPresetStore
+            original_store=camera_page.preset_store;camera_page.preset_store=CameraPresetStore(root/'TEST_ONLY_presets.json')
+            if len(camera_page.page_preset_controls)!=6 or any(choice.count()!=2 for choice,_,_ in camera_page.page_preset_controls.values()):
+                raise RuntimeError('Camera pages must have two explicit presets each')
+            camera_page.line_trigger_source.setCurrentIndex(camera_page.line_trigger_source.findData('Software'));camera_page.recalculate()
+            if not camera_page.line_trigger_source.isEnabled() or camera_page.plan['metrics']['line_triggers_per_cycle'] is not None:
+                raise RuntimeError('Editable line source must not reuse converter timing')
+            camera_page.apply_page_preset('trigger');camera_page.preset_store=original_store
+            if camera_page.settings().line_source!='FrequencyConverter':raise RuntimeError('Camera page preset did not restore reference trigger source')
+            report.update(camera_page_presets=True,camera_editable_line_source=True)
             report['camera_cycle_capacity']=True;report['camera_measured_cycle']=True
             if camera_page.controls['working_distance_mm'].isHidden() or not camera_page.controls['working_distance_mm'].isEnabled() or not camera_page.controls['framing_source'].isHidden():
                 raise RuntimeError('Frozen automatic camera input layout failed')

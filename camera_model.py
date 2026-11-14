@@ -66,6 +66,7 @@ class CameraSettings:
     frame_line:str='Line3'
     frame_edge:str='RisingEdge'
     encoder_line:str='Line1'
+    line_source:str='FrequencyConverter'
     line_edge:str='FallingEdge'
     input_format:str='Differential'
     a_debounce_ns:int=300
@@ -116,7 +117,7 @@ class CameraSettings:
         if self.vertical_margin_percent!=-1 and not 0<=self.vertical_margin_percent<=1000:raise CameraError('纵向余量应在0～1000%，旧配置兼容值为-1。')
         if self.kind=='line' and self.frequency_strategy=='cycle' and self.cycle_idle_lines<1:raise CameraError('周期方案必须预留至少1行的采集空档。')
         if self.framing_source!='legacy' and (self.pixel_pitch_um<=0 or self.focal_length_mm<=0):raise CameraError('视野计算需要有效的像元尺寸和焦距。')
-        if self.kind=='line' and self.auto_frequency and self.frequency_strategy=='pitch' and self.encoder_travel_mm_per_rev<=0:raise CameraError('按走料精度计算倍分频需要填写编码器每圈对应的实际走料长度。')
+        if self.kind=='line' and self.line_source=='FrequencyConverter' and self.auto_frequency and self.frequency_strategy=='pitch' and self.encoder_travel_mm_per_rev<=0:raise CameraError('按走料精度计算倍分频需要填写编码器每圈对应的实际走料长度。')
         if not 0<=self.frequency_tolerance_percent<=100:raise CameraError('采样误差容差应在0～100%。')
         inverse=self.framing_source=='material' or (self.framing_source=='legacy' and self.optics_direction=='precision_to_wd')
         optical_wd=self.x_mm_per_px*self.focal_length_mm/(self.pixel_pitch_um/1000) if self.pixel_pitch_um>0 and inverse else self.working_distance_mm
@@ -131,7 +132,9 @@ class CameraSettings:
             if getattr(self,name)<0:raise CameraError(name+' 不能为负数。')
         if self.digital_shift < -1 or self.black_level < -1:raise CameraError('未设置增益/黑电平用-1，设置值不能为负。')
         if self.frame_selector not in ('FrameStart','FrameBurstStart') or self.frame_edge not in ('RisingEdge','FallingEdge') or self.line_edge not in ('RisingEdge','FallingEdge'):raise CameraError('触发选择器或边沿无效。')
-        used=[self.frame_line]+([self.encoder_line] if self.kind=='line' else [])
+        line_input=self.encoder_line if self.line_source in ('FrequencyConverter','EncoderModuleOut') else self.line_source if re.fullmatch(r'Line\d+',self.line_source) else None
+        if not self.line_source or len(self.line_source)>128:raise CameraError('行触发源不能为空或过长。')
+        used=[self.frame_line]+([line_input] if self.kind=='line' and line_input else [])
         if self.output0_enabled:used.append(self.output0_line)
         if self.output4_enabled:used.append(self.output4_line)
         if any(not re.fullmatch(r'Line\d{1,2}',line) for line in used) or len(used)!=len(set(used)):raise CameraError('帧、编码器和输出IO须使用不同的有效Line。')
@@ -156,7 +159,7 @@ def settings_from_dict(value):
     allowed={f.name for f in fields(CameraSettings)}
     if value['schema']=='vt-camera-config/1':
         legacy={'product_pitch_mm','image_top_margin_mm','image_bottom_margin_mm','allow_overheight'}
-        added={'line_y_source','calibration_length_mm','calibration_rows','image_horizontal_margin_mm','image_vertical_margin_mm','optics_direction','camera_model_id','optics_method','principal_plane_offset_mm','auto_frequency','encoder_travel_mm_per_rev','frequency_tolerance_percent','framing_source','horizontal_margin_percent','vertical_margin_percent','frequency_strategy','height_rounding','cycle_idle_lines','cycle_travel_mm'}
+        added={'line_source','line_y_source','calibration_length_mm','calibration_rows','image_horizontal_margin_mm','image_vertical_margin_mm','optics_direction','camera_model_id','optics_method','principal_plane_offset_mm','auto_frequency','encoder_travel_mm_per_rev','frequency_tolerance_percent','framing_source','horizontal_margin_percent','vertical_margin_percent','frequency_strategy','height_rounding','cycle_idle_lines','cycle_travel_mm'}
         if set(value)-(allowed-added)-legacy-{'schema'}:raise CameraError('旧相机配置含未知字段。')
         def old_number(key,default,positive=False):
             number=value.get(key,default)
@@ -218,11 +221,13 @@ def calculate(settings,limits=None):
     fov_x=dx*s.sensor_width
     if s.framing_source=='distance':target_fov_w=fov_x
     cycle=s.kind=='line' and s.frequency_strategy=='cycle'
-    cycle_calibrated=cycle and s.cycle_travel_mm>0
+    converter=s.line_source=='FrequencyConverter'
+    cycle_calibrated=cycle and converter and s.cycle_travel_mm>0
     cycle_pending=cycle and s.auto_frequency and not cycle_calibrated
     counts=s.ppr*s.edge_factor*s.encoder_revs if s.kind=='line' else None
     lines=s.ppr*s.edge_factor*s.encoder_revs*s.multiplier/(s.pre_divider*s.post_divider) if s.kind=='line' else None
-    dy=s.y_mm_per_px if lines is not None else (s.fov_height_mm/s.sensor_height if s.precision_source=='fov' else s.y_mm_per_px)
+    if not converter:lines=None;cycle_pending=False
+    dy=s.y_mm_per_px if s.kind=='line' else (s.fov_height_mm/s.sensor_height if s.precision_source=='fov' else s.y_mm_per_px)
     if s.kind=='line':
         if s.line_y_source=='calibration':dy=s.calibration_length_mm/s.calibration_rows
         elif s.line_y_source=='square':
@@ -231,7 +236,7 @@ def calculate(settings,limits=None):
         elif s.line_y_source=='legacy':blocking.append('旧配置已迁移：Y精度来自旧产品节距换算，请在工位标定中选择并确认新的Y精度来源后再写入。')
     if cycle:dy=dx
     frequency_solution=None;target_dy=dy
-    if cycle:
+    if cycle and converter:
         if cycle_calibrated:
             if s.auto_frequency:
                 from camera_frequency import solve_frequency
@@ -246,7 +251,7 @@ def calculate(settings,limits=None):
         else:
             blocking.append('请填写每周期实际走料距离，才能计算或校验倍分频及纵向精度。')
             if cycle_pending:lines=None
-    if s.kind=='line' and s.auto_frequency and not cycle:
+    if s.kind=='line' and s.auto_frequency and not cycle and converter:
         from camera_frequency import solve_frequency
         frequency_solution=solve_frequency(s.encoder_travel_mm_per_rev/(s.ppr*s.edge_factor*dy),limits)
         s=replace(s,**{key:frequency_solution[key] for key in ('pre_divider','multiplier','post_divider')})
@@ -254,6 +259,9 @@ def calculate(settings,limits=None):
         lines=s.ppr*s.edge_factor*s.encoder_revs*frequency_solution['ratio']
         if abs(100*(dy/target_dy-1))>s.frequency_tolerance_percent+1e-9:blocking.append('设备整数倍分频无法满足目标Y采样容差，请调整工位或目标精度。')
         if not frequency_solution['limits_verified']:warnings.append('倍分频使用1～5规划范围，连接相机后须按设备范围重算；不是设备支持保证。')
+    if s.kind=='line' and not converter:
+        warnings.append('当前行触发源为'+s.line_source+'，倍分频不参与此行触发链；图高按输入精度规划，实际行节拍及采样请按该信号源核对。')
+        if s.limit_line_rate and not s.line_rate_override:blocking.append('当前行触发源不能自动估算行频，请填写手动行频上限或关闭行频限制。')
     if s.kind=='area' and (s.precision_source=='optics' or s.framing_source!='legacy'):dy=dx
     product_h=math.ceil(s.target_length_mm/dy-1e-10)
     material_w=math.ceil(s.target_width_mm/dx-1e-10)
@@ -297,7 +305,7 @@ def calculate(settings,limits=None):
     elif s.kind=='area':
         if s.exposure_us>60_000_000/s.products_per_minute:blocking.append('曝光时间超过产品帧周期。')
     blur=required*dy*s.exposure_us/1_000_000 if required is not None else None
-    if cycle:blur=required*s.cycle_travel_mm/lines*s.exposure_us/1_000_000 if s.cycle_travel_mm>0 else None
+    if cycle:blur=required*s.cycle_travel_mm/lines*s.exposure_us/1_000_000 if cycle_calibrated else None
     entries=[node('OffsetX','int',offset_x),node('Width','int',width),node('Height','int',height)]
     entries.extend([node('AcquisitionMode','enum','Continuous'),node('ExposureMode','enum','Timed',{'TriggerSelector':'LineStart'} if s.kind=='line' else {})])
     if s.frame_selector=='FrameBurstStart':entries.append(node('AcquisitionBurstFrameCount','int',1,{'TriggerSelector':s.frame_selector}))
@@ -313,20 +321,22 @@ def calculate(settings,limits=None):
     if s.device_name:entries.append(node('DeviceUserID','string',s.device_name))
     frame={'TriggerSelector':s.frame_selector}
     entries.extend([node('TriggerSource','enum',s.frame_line,frame),node('TriggerActivation','enum',s.frame_edge,frame),node('TriggerMode','enum','On',frame)])
-    for line,debounce in [(s.frame_line,s.z_debounce_ns)]+([(s.encoder_line,s.a_debounce_ns)] if s.kind=='line' else []):
+    line_input=s.encoder_line if s.line_source in ('FrequencyConverter','EncoderModuleOut') else s.line_source if re.fullmatch(r'Line\d+',s.line_source) else None
+    for line,debounce in [(s.frame_line,s.z_debounce_ns)]+([(line_input,s.a_debounce_ns)] if s.kind=='line' and line_input else []):
         context={'LineSelector':line};entries.append(node('LineMode','enum','Input',context))
         if s.input_format:entries.append(node('LineFormat','enum',s.input_format,context))
         entries.append(node('LineDebouncerTimeNs','int',debounce,context))
     if s.kind=='line':
         tdi=node('TDIMode','enum','Line_1');tdi['optional']=True;entries.append(tdi)
-        entries.extend([node('EncoderSourceA','enum',s.encoder_line),node('EncoderSourceB','enum','NA'),
+        if s.line_source in ('FrequencyConverter','EncoderModuleOut'):entries.extend([node('EncoderSourceA','enum',s.encoder_line),node('EncoderSourceB','enum','NA'),
             node('EncoderOutputMode','enum','AnyDirection'),node('EncoderCounterMode','enum','IgnoreDirection'),
-            node('InputSource','enum','EncoderModuleOut'),
-            node('SignalAlignment','enum',s.line_edge),node('AcquisitionLineRateEnable','bool',s.limit_line_rate)])
-        if not cycle_pending:entries.extend([node('PreDivider','int',s.pre_divider),node('Multiplier','int',s.multiplier),node('PostDivider','int',s.post_divider)])
+            ])
+        entries.append(node('AcquisitionLineRateEnable','bool',s.limit_line_rate))
+        if converter:entries.extend([node('InputSource','enum','EncoderModuleOut'),node('SignalAlignment','enum',s.line_edge)])
+        if converter and not cycle_pending:entries.extend([node('PreDivider','int',s.pre_divider),node('Multiplier','int',s.multiplier),node('PostDivider','int',s.post_divider)])
         if s.limit_line_rate and rate is not None:entries.append(node('AcquisitionLineRate','int',int(rate)))
         context={'TriggerSelector':'LineStart'}
-        entries.extend([node('TriggerSource','enum','FrequencyConverter',context),node('TriggerActivation','enum',s.line_edge,context),node('TriggerMode','enum','On',context)])
+        entries.extend([node('TriggerSource','enum',s.line_source,context),node('TriggerActivation','enum',s.line_edge,context),node('TriggerMode','enum','On',context)])
     for enabled,line,source in ((s.output0_enabled,s.output0_line,s.output0_source),(s.output4_enabled,s.output4_line,s.output4_source)):
         if enabled:
             context={'LineSelector':line};entries.extend([node('LineMode','enum',s.output_mode,context),node('LineSource','enum',source,context)])
@@ -342,7 +352,7 @@ def calculate(settings,limits=None):
         'optical_magnification':s.pixel_pitch_um/1000/dx if s.pixel_pitch_um>0 else None,
         'optics_method':s.optics_method if s.precision_source=='optics' else s.precision_source,
         'frequency_solution':frequency_solution,'target_y_mm_per_px':target_dy,
-        'y_sampling_error_percent':100*(dy/target_dy-1) if cycle_calibrated or (s.kind=='line' and s.auto_frequency and not cycle) else None,
+        'y_sampling_error_percent':100*(dy/target_dy-1) if cycle_calibrated or (s.kind=='line' and converter and s.auto_frequency and not cycle) else None,
         'cycle_calibrated':cycle_calibrated,'frequency_pending':cycle_pending,
         'input_counts_per_cycle':counts,
         'encoder_counts_per_mm':counts/s.cycle_travel_mm if cycle_calibrated else None,
@@ -351,8 +361,8 @@ def calculate(settings,limits=None):
         'target_cycle_line_count':s.cycle_travel_mm/target_dy if cycle_calibrated else None,
         'cycle_idle_available':math.floor(lines+1e-8)-height if lines is not None else None,
         'cycle_travel_for_square_mm':lines*dx if lines is not None else None,
-        'actual_y_mm_per_px':s.cycle_travel_mm/lines if cycle and s.cycle_travel_mm>0 else None,
-        'actual_product_height_lines':math.ceil(s.target_length_mm*lines/s.cycle_travel_mm-1e-10) if cycle and s.cycle_travel_mm>0 else None,
+        'actual_y_mm_per_px':s.cycle_travel_mm/lines if cycle_calibrated else None,
+        'actual_product_height_lines':math.ceil(s.target_length_mm*lines/s.cycle_travel_mm-1e-10) if cycle_calibrated else None,
         'horizontal_margin_percent_actual':100*(fov_x/s.target_width_mm-1),
         'effective_counts_per_product':counts,
         'line_triggers_per_cycle':lines,'lines_per_product':lines,'required_line_rate_hz':required,'recommended_line_rate_hz':recommended,
@@ -396,7 +406,9 @@ def import_mfs_text(text,current=None):
                 settings.frame_selector=trigger
                 if key=='TriggerSource':settings.frame_line=value
                 elif key=='TriggerActivation':settings.frame_edge=value
-            elif trigger=='LineStart' and key=='TriggerActivation':settings.line_edge=value
+            elif trigger=='LineStart':
+                if key=='TriggerActivation':settings.line_edge=value
+                elif key=='TriggerSource':settings.line_source=value
         if 'EncoderSourceA' in plain:settings.encoder_line=plain['EncoderSourceA']
     except ValueError as exc:raise CameraError('MFS中的数值格式无效。') from exc
     return settings.validate(),len(values)

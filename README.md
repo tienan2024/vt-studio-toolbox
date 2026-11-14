@@ -1,4 +1,4 @@
-# VT STUDIO 图像工具箱 · 7.11.0
+# VT STUDIO 图像工具箱 · 7.12.0
 
 最后更新：2026-11-14
 
@@ -8,9 +8,9 @@
 
 ## 打开工具
 
-GitHub仓库：[tienan2024/vt-studio-toolbox](https://github.com/tienan2024/vt-studio-toolbox)。6.5使用矩形XML；7.11.0包含多边形XML、脚本生成/测试、SOL应用和相机参数，发布版本以Release版本号为准。直接使用请从 [Releases](https://github.com/tienan2024/vt-studio-toolbox/releases) 下载Windows便携包，解压后运行VTStudioToolbox.exe；VTStudioCLI.exe供AI与脚本调用。源码仓库包含必要的原转换核心，不包含Python环境、生产图片、本机验证目录或构建产物。
+GitHub仓库：[tienan2024/vt-studio-toolbox](https://github.com/tienan2024/vt-studio-toolbox)。6.5使用矩形XML；7.12.0包含多边形XML、脚本生成/测试、SOL应用和相机参数，发布版本以Release版本号为准。直接使用请从 [Releases](https://github.com/tienan2024/vt-studio-toolbox/releases) 下载Windows便携包，解压后运行VTStudioToolbox.exe；VTStudioCLI.exe供AI与脚本调用。源码仓库包含必要的原转换核心，不包含Python环境、生产图片、本机验证目录或构建产物。
 
-优先双击桌面“VT STUDIO 工具箱”快捷方式。7.11.0独立包位于 `D:/CodexBuilds/vt-studio-toolbox/7.11.0/VTStudioToolbox/VTStudioToolbox.exe`（源码的release/7.11.0入口通过目录联接保留），启动脚本优先打开新版，旧窗口和旧包保留。便携版需保留整个文件夹及_internal，不能只复制EXE。
+优先双击桌面“VT STUDIO 工具箱”快捷方式。7.12.0独立包位于 `D:/CodexBuilds/vt-studio-toolbox/7.12.0/VTStudioToolbox/VTStudioToolbox.exe`（源码的release/7.12.0入口通过目录联接保留），启动脚本优先打开新版，旧窗口和旧包保留。便携版需保留整个文件夹及_internal，不能只复制EXE。
 
 源码启动：
 
@@ -35,7 +35,9 @@ python app.py
 
 7.9仅将“材料与视野”数字框的加减改为固定值图标：点击锁定后数值只读，计算也不能覆盖；再点解锁。程序只调整未固定变量，固定条件冲突时提示并停止写入。固定状态用于当前计算会话，加载另一份配置会清除；编码器等其他位置不改。没有固定约束时，按最后编辑的数据自动互逆计算：改距离算视野和余量，改材料/余量算距离。结果包含不含余量的材料像素，默认规划1862×3724px，与整张2048×3800px区分。
 
-7.11将预分频、倍频、后分频分别限制在1～5，在设备范围内求近似比例；新工位默认Y误差容差±15%，实际精度和误差仍显示，旧配置保留原明确容差。编码器页填写每周期实测走料，自动推算脉冲/mm及材料占比；先计算实际采样，再检查图高和空档。未测量时显示“待测量”并停止写入。连接区展开后结果内容可滚动，摘要不再与表格重叠；顶部三项统一尺寸。行触发明确显示FrequencyConverter输出，编码器A相IO单列。调试和计算经验见[相机与工位调试经验总结](docs/15-相机与工位调试经验总结.md)。
+7.12为相机六个分页分别增加两组本机预设，选择后点击“应用预设”才填入当前页，保存当前可更新所选组。两组初始相同，按所提供MFS摘录及现有工位默认值初始化；未知实测项保留当前输入。行触发源现在可选择，默认FrequencyConverter，连接后读取设备支持项；配置可保存该选择。
+
+7.11将预分频、倍频、后分频分别限制在1～5，在设备范围内求近似比例；新工位默认Y误差容差±15%，实际精度和误差仍显示，旧配置保留原明确容差。编码器页填写每周期实测走料，自动推算脉冲/mm及材料占比；先计算实际采样，再检查图高和空档。使用FrequencyConverter行源且未测量时显示“待测量”并停止写入。连接区展开后结果内容可滚动，摘要不再与表格重叠；顶部三项统一尺寸。行触发明确显示FrequencyConverter输出，编码器A相IO单列。调试和计算经验见[相机与工位调试经验总结](docs/15-相机与工位调试经验总结.md)。
 
 一帧一个产品，线扫按外部行触发采满Height后结束本帧，无需产品间距。线扫Y精度支持已知值、产品长度/实测行数标定或明确标注的方形像素规划；下位机负责相位。旧相机配置可迁移，旧线扫Y来源需确认后才可写入。四个工作区共用细箭头下拉列表、数字输入、焦点/禁用态及紧凑表格编辑样式。
 

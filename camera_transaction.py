@@ -98,7 +98,7 @@ def _verify_capacity(camera,settings):
     maximum=values.get('ResultingLineRate');external=values.get('ResultingTriggerLineRate')
     if settings.kind=='line' and isinstance(maximum,(int,float)) and maximum>0:
         expected=calculate(replace(settings,auto_frequency=False))['metrics']['required_line_rate_hz']
-        required=max(expected,external if isinstance(external,(int,float)) and external>0 else 0)
+        required=max(expected or 0,external if isinstance(external,(int,float)) and external>0 else 0)
         if required>maximum+1e-6:raise CameraError('目标成像设置允许的行频低于预计/已观测外部触发行频，请调整曝光、ROI或压缩并重新对比。')
     return rows
 
@@ -106,7 +106,7 @@ def _verify_capacity(camera,settings):
 def compare(camera,settings):
     geometry=camera.geometry();geometry['area']=settings.kind=='area'
     plan=calculate(settings,geometry['limits']);errors=list(plan['blocking']);rows=[]
-    if settings.kind=='line' and settings.auto_frequency and not plan['metrics']['frequency_pending'] and (not plan['metrics']['frequency_solution'] or not plan['metrics']['frequency_solution']['limits_verified']):
+    if settings.kind=='line' and settings.line_source=='FrequencyConverter' and settings.auto_frequency and not plan['metrics']['frequency_pending'] and (not plan['metrics']['frequency_solution'] or not plan['metrics']['frequency_solution']['limits_verified']):
         errors.append('自动倍分频缺少设备的完整范围，请读取设备或核对节点支持。')
     if settings.sensor_width!=geometry['sensor_width']:errors.append('配置传感器宽度与设备不同，请先读取设备尺寸。')
     if settings.kind=='area' and settings.sensor_height!=geometry['sensor_height']:errors.append('配置传感器高度与设备不同，请先读取设备尺寸。')
@@ -171,6 +171,9 @@ def read_trigger_ios(camera,line):
             cap=camera.read('TriggerSource','enum');result['frame_line']=[v for v in cap['choices'] if v.startswith('Line') and v[4:].isdigit()]
         except CameraError:pass
         if line:
+            try:
+                select.select({'TriggerSelector':'LineStart'});result['line_source']=camera.read('TriggerSource','enum')['choices']
+            except CameraError:pass
             try:result['encoder_line']=camera.read('EncoderSourceA','enum')['choices']
             except CameraError:pass
     return result

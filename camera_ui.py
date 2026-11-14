@@ -1,5 +1,5 @@
 """Camera workstation: calculate, inspect, compare, then explicitly write UserSet1."""
-from dataclasses import asdict
+from dataclasses import asdict,replace
 import json
 from pathlib import Path
 from PySide6.QtCore import Qt,QThread,Signal,QTimer,QRectF,QSize
@@ -8,12 +8,13 @@ from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabe
     QPushButton,QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QCheckBox,QTabWidget,
     QSplitter,QScrollArea,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,
     QPlainTextEdit,QFileDialog,QProgressBar,QMenu,QGridLayout,QSizePolicy,QToolButton,QAbstractSpinBox,QLayout,QFrame)
-from styled_controls import make_combo
+from styled_controls import make_combo,style_control
 from camera_model import CameraSettings,CameraError,calculate,config_dict,settings_from_dict,import_mfs_text,fingerprint,workflow_settings
 from camera_sdk import discover_mvs,enumerate_cameras
 from camera_transaction import inspect_camera,preview_camera,write_camera
 from camera_options import PRESETS,FIELD_LABELS,LABELS,option_label
 from camera_constraints import resolve_fixed_values,within_precision
+from camera_presets import CameraPresetStore
 
 
 def value_lock_icon(locked):
@@ -131,7 +132,7 @@ class ConditionForm:
         self.fit()
 
     def arrange(self,widgets,wide=()):
-        self.order=list(widgets)
+        self.order=([self.preset_bar] if hasattr(self,'preset_bar') else [])+list(widgets)
         self.entries=[(widget,cell,2 if widget in wide else span) for widget,cell,span in self.entries]
         self.fit()
 
@@ -178,6 +179,7 @@ class CameraPage(QWidget):
         self.worker=None;self.preview=None;self.last_report=None;self.geometry=None;self.plan=None;self._loading=False
         self.controls={};self.labels={};self.field_forms={};self.field_titles={};self.property_forms=[];self.input_forms=[];self._input_fit_pending=False;self.language='zh';self.output_caps={}
         self.fixed_values={};self.lock_buttons={}
+        self.preset_store=CameraPresetStore();self.page_preset_controls={}
         self.sdk=discover_mvs();root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(10)
         tools=QHBoxLayout();tools.addStretch()
         self.language_box=self.styled_combo();self.language_box.addItem('中文','zh');self.language_box.addItem('English','en')
@@ -203,6 +205,8 @@ class CameraPage(QWidget):
         encoder=ConditionForm(self,'编码器与图高');trigger=self.form_tab('采集触发')
         io=PropertyForm(self,'数字 IO');self.io_table=io.table
         calibration=self.form_tab('专业标定');image=self.form_tab('成像')
+        for page,form in zip(('material','encoder','trigger','io','calibration','imaging'),(station,encoder,trigger,io,calibration,image)):
+            self.add_page_presets(form,page)
         self.basic_tab_count=3
         self.combo(station,'optics_method','计算模式',[(option_label(v),v) for v in ('quick','thin_lens')])
         self.number(station,'target_width_mm','材料宽度 / mm',.001,100000,3)
@@ -232,7 +236,10 @@ class CameraPage(QWidget):
         self.frame_trigger_group=self.trigger_group(trigger,'frame_line','帧触发','Line3')
         self.line_trigger_group=QWidget();line_layout=QVBoxLayout(self.line_trigger_group);line_layout.setContentsMargins(0,6,0,10);line_layout.setSpacing(8)
         self.line_trigger_title=QLabel('行触发');self.line_trigger_title.setStyleSheet('font-weight:600;');line_layout.addWidget(self.line_trigger_title)
-        self.line_trigger_source=self.styled_combo();self.line_trigger_source.addItem('频率转换器输出','FrequencyConverter');self.line_trigger_source.setEnabled(False)
+        self.line_trigger_source=self.styled_combo()
+        for value in ('FrequencyConverter','EncoderModuleOut','Line0','Line1','Line2','Line3','Line4','Software'):self.line_trigger_source.addItem(option_label(value),value)
+        self.controls['line_source']=self.line_trigger_source;self.labels['line_source']=self.line_trigger_title;self.field_titles['line_source']='行触发'
+        self.line_trigger_source.currentIndexChanged.connect(self.changed)
         line_layout.addWidget(self.line_trigger_source);trigger.addRow(self.line_trigger_group)
         self.encoder_trigger_group=self.trigger_group(trigger,'encoder_line','编码器 A 相输入','Line1')
         self.trigger_help=QLabel();self.trigger_help.setWordWrap(True);self.trigger_help.setObjectName('Subtle');trigger.addRow(self.trigger_help)
@@ -334,10 +341,38 @@ class CameraPage(QWidget):
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.timeout.connect(self.recalculate)
         self.device.currentIndexChanged.connect(self.device_changed)
         self.load_settings(workflow_settings());self.notify('按材料尺寸规划；实际无拉伸需用原始产品图或周期走料标定。')
+        if self.preset_store.load_error:self.notify('预设文件读取失败，暂用参考预设：'+self.preset_store.load_error,True)
 
     @staticmethod
     def button(text,slot,layout):
         result=QPushButton(text);result.clicked.connect(slot);layout.addWidget(result);return result
+
+    def add_page_presets(self,form,page):
+        bar=QWidget();row=QHBoxLayout(bar);row.setContentsMargins(0,0,0,0);row.setSpacing(8)
+        choice=self.styled_combo();choice.setProperty('vtRegularHeight',True);choice.addItems(['预设 1','预设 2']);row.addWidget(choice,1)
+        apply=self.button('应用预设',lambda:self.apply_page_preset(page),row)
+        save=self.button('保存当前',lambda:self.save_page_preset(page),row)
+        choice.setToolTip('两组初始值均参考所提供的相机配置；未提供的工位实测值保持当前输入。')
+        self.page_preset_controls[page]=(choice,apply,save);form.addRow(bar);style_control(choice)
+        if isinstance(form,ConditionForm):form.preset_bar=bar
+
+    def apply_page_preset(self,page):
+        try:
+            slot=self.page_preset_controls[page][0].currentIndex();before=self.settings(validate=False)
+            settings=replace(before,**self.preset_store.values(page,slot))
+            if page=='imaging' and settings.width_override+settings.offset_x>settings.sensor_width:
+                raise CameraError('参考ROI超出当前相机宽度，请先在材料页应用参考相机，或保存适合当前相机的预设。')
+            if (settings.kind,settings.sensor_width,settings.camera_model_id)!=(before.kind,before.sensor_width,before.camera_model_id):self.geometry=None;self.output_caps={}
+            self.load_settings(settings,preserve_locks=page!='material')
+            if self.plan is None:return
+            self.notify('已应用本页预设 '+str(slot+1)+'。'+('；'.join(self.plan['blocking']) if self.plan and self.plan['blocking'] else ''))
+        except Exception as exc:self.notify(str(exc),True)
+
+    def save_page_preset(self,page):
+        try:
+            slot=self.page_preset_controls[page][0].currentIndex()
+            self.preset_store.save(page,slot,self.settings(validate=False));self.notify('本页当前值已保存到预设 '+str(slot+1)+'。')
+        except Exception as exc:self.notify('预设保存失败：'+str(exc),True)
 
     @staticmethod
     def table(headers):
@@ -497,6 +532,9 @@ class CameraPage(QWidget):
 
     def translate_options(self):
         en=self.language=='en'
+        for choice,apply,save in self.page_preset_controls.values():
+            choice.setItemText(0,'Preset 1' if en else '预设 1');choice.setItemText(1,'Preset 2' if en else '预设 2')
+            apply.setText('Apply preset' if en else '应用预设');save.setText('Save current' if en else '保存当前')
         for key,label in self.labels.items():
             original=self.field_titles.get(key,label.text());is_table=isinstance(self.field_forms.get(key),PropertyForm)
             name,_,unit=original.partition(' / ')
@@ -598,8 +636,7 @@ class CameraPage(QWidget):
         for key in line_only:
             self.controls[key].setEnabled(line);self.field_forms[key].setRowVisible(self.controls[key],line)
         self.line_trigger_group.setVisible(line);self.encoder_trigger_group.setVisible(line);self.controls['encoder_line'].setEnabled(line)
-        self.line_trigger_title.setText('Line trigger' if self.language=='en' else '行触发')
-        self.line_trigger_source.setItemText(0,'Frequency converter output' if self.language=='en' else '频率转换器输出')
+        self.line_trigger_source.setEnabled(line)
         self.controls['sensor_height'].setEnabled(not line);self.controls['offset_y'].setEnabled(not line)
         self.controls['fov_width_mm'].setEnabled(fov);self.controls['fov_height_mm'].setEnabled(fov and not line)
         ysource=self.controls['line_y_source'].currentData()
@@ -610,8 +647,10 @@ class CameraPage(QWidget):
         known=self.camera_type.currentData() in PRESETS
         self.controls['focal_length_mm'].setEnabled(optics and not known);self.controls['pixel_pitch_um'].setEnabled(optics and not known)
         automatic=line and self.controls['auto_frequency'].isChecked()
+        converter=self.controls['line_source'].currentData()=='FrequencyConverter'
+        self.controls['auto_frequency'].setEnabled(line and converter)
         self.controls['encoder_travel_mm_per_rev'].setEnabled(automatic)
-        for key in ('pre_divider','multiplier','post_divider'):self.controls[key].setEnabled(line and not automatic)
+        for key in ('pre_divider','multiplier','post_divider'):self.controls[key].setEnabled(line and converter and not automatic)
         self.controls['sensor_width'].setEnabled(not known);self.controls['sensor_height'].setEnabled(not known and not line)
         self.controls['camera_model_id'].setReadOnly(True)
         for key,visible in {'pixel_pitch_um':not known,'working_distance_mm':source!='fov','focal_length_mm':source!='fov'}.items():
@@ -628,6 +667,8 @@ class CameraPage(QWidget):
             for suffix in ('line','source'):self.controls[prefix+'_'+suffix].setEnabled(self.controls[prefix+'_enabled'].isChecked())
         self.controls['strobe_duration_us'].setEnabled(self.controls['output4_enabled'].isChecked())
         self.trigger_help.setText(('Frame trigger only.' if self.language=='en' else '面阵仅使用帧触发。') if not line else ('Encoder A → FrequencyConverter → LineStart.' if self.language=='en' else '编码器 A 相 → 频率转换器 → 行触发。'))
+        if line and self.controls['line_source'].currentData()!='FrequencyConverter':
+            self.trigger_help.setText(str(self.controls['line_source'].currentData())+(' → LineStart; verify this source timing.' if self.language=='en' else ' → 行触发；按此信号源核对行节拍。'))
         framing=self.controls['framing_source'].currentData();workflow=framing!='legacy';cycle=line and self.controls['frequency_strategy'].currentData()=='cycle'
         self.field_forms['framing_source'].setRowVisible(self.controls['framing_source'],False)
         margin=self.controls['horizontal_margin_percent'];blocked=margin.blockSignals(True)
@@ -759,7 +800,7 @@ class CameraPage(QWidget):
 
     def render_workflow(self,plan):
         self.plan=plan;s=plan['settings'];m=plan['metrics'];line=s['kind']=='line'
-        pending=m['frequency_pending'];measured=m['cycle_calibrated']
+        pending=m['frequency_pending'];measured=m['cycle_calibrated'];converter=s['line_source']=='FrequencyConverter'
         rows=[('视野宽 / 工作距离',format(m['fov_width_mm'],'.3f')+' / '+format(m['working_distance_mm'],'.3f'),'mm'),
               ('实际精度 X / Y' if measured else '方形像素规划' if line else '光学像素精度',
                format(m['x_mm_per_px'],'.6f')+' / '+format(m['y_mm_per_px'],'.6f') if measured else format(m['x_mm_per_px'],'.9f'),'mm/px'),
@@ -767,9 +808,9 @@ class CameraPage(QWidget):
               self.material_pixels_row(m),
               ('取图宽 × 高',str(m['width'])+' × '+str(m['height']),'px')]
         if line:
-            rows.extend([('预分 / 倍频 / 后分','待测量' if pending else str(s['pre_divider'])+' / '+str(s['multiplier'])+' / '+str(s['post_divider']),''),
-                         ('周期总行触发','待测量' if pending else format(m['line_triggers_per_cycle'],'.6g'),'次'),
-                         ('周期剩余空档','待测量' if pending else str(m['cycle_idle_available']),'行')])
+            rows.extend([('预分 / 倍频 / 后分','不使用' if not converter else '待测量' if pending else str(s['pre_divider'])+' / '+str(s['multiplier'])+' / '+str(s['post_divider']),''),
+                         ('周期总行触发',format(m['line_triggers_per_cycle'],'.6g') if m['line_triggers_per_cycle'] is not None else '待测量' if pending else '待核对','次'),
+                         ('周期剩余空档',str(m['cycle_idle_available']) if m['cycle_idle_available'] is not None else '待测量' if pending else '待核对','行')])
         else:rows.append(('产品帧频',format(m['frame_rate_hz'],'.3f'),'Hz'))
         self.fill(self.metrics,rows);self.set_material_pixels_tooltip(3,m);self.fit_metrics();self.frame_preview.plan=plan;self.frame_preview.update()
         self.fill(self.node_table,[[', '.join(n['selectors'].values()) or '全局',n['key'],n['value']] for n in plan['nodes']])
@@ -777,7 +818,8 @@ class CameraPage(QWidget):
         text=('规划覆盖 ' if line and s['frequency_strategy']=='cycle' and not measured else '实际覆盖 ')+format(m['coverage_width_mm'],'.3f')+' × '+format(m['coverage_height_mm'],'.3f')+' mm · 图内背景 '+str(m['background_height_lines'])+' 行'
         if measured:text+='\n材料占周期 '+format(m['material_cycle_fraction']*100,'.2f')+'% · 输入 '+format(m['encoder_counts_per_mm'],'.3f')+' 脉冲/mm · 预计行频 '+format(m['required_line_rate_hz'],'.0f')+' Hz'
         elif pending:text+='\n填写实测周期走料后，自动计算脉冲/mm和倍分频。'
-        elif line:text+=' · 预计行频 '+format(m['required_line_rate_hz'],'.0f')+' Hz'
+        elif line and m['required_line_rate_hz'] is not None:text+=' · 预计行频 '+format(m['required_line_rate_hz'],'.0f')+' Hz'
+        elif line:text+='\n当前行触发源 '+s['line_source']+'；行节拍与实际采样需按该信号源核对。'
         self.optics_summary.setText(text)
         if plan['blocking']:message='；'.join(plan['blocking'])
         elif measured:
@@ -911,6 +953,7 @@ class CameraPage(QWidget):
                     key=row['entry']['key'];choices=row['capability'].get('choices',[])
                     if key=='PixelFormat':self.apply_enum_choices('pixel_format',['',*choices])
                     elif key=='EncoderSourceA':self.apply_enum_choices('encoder_line',choices)
+                    elif key=='TriggerSource' and row['entry']['selectors'].get('TriggerSelector')=='LineStart':self.apply_enum_choices('line_source',choices)
                     elif key=='TriggerSource' and row['entry']['selectors'].get('TriggerSelector')==data['plan']['settings']['frame_selector']:
                         self.apply_enum_choices('frame_line',[v for v in choices if v.startswith('Line') and v[4:].isdigit()])
             self.refresh_output_choices()
