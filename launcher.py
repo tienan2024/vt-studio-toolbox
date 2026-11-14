@@ -341,6 +341,16 @@ def verify_package(report_path):
             if camera_page.settings().framing_source!='material' or abs(camera_page.controls['working_distance_mm'].value()-184.152)>.001:
                 raise RuntimeError('Frozen margin edit did not calculate distance')
             report.update(camera_auto_reciprocal=True,camera_material_pixels=True)
+            wd=camera_page.controls['working_distance_mm'];fixed_distance=wd.value()
+            camera_page.lock_buttons['working_distance_mm'].click()
+            camera_page.controls['target_width_mm'].setValue(210);camera_page.recalculate()
+            if (not wd.isReadOnly() or wd.value()!=fixed_distance or wd.buttonSymbols().name!='NoButtons' or
+                    abs(camera_page.controls['horizontal_margin_percent'].value()-4.76)>.001 or
+                    camera_page.controls['ppr'].buttonSymbols().name=='NoButtons'):
+                raise RuntimeError('Frozen fixed value or scoped lock control failed')
+            camera_page.controls['target_width_mm'].setValue(200);camera_page.recalculate()
+            camera_page.lock_buttons['working_distance_mm'].click()
+            report['camera_fixed_values']=True
             from camera_model import CameraSettings
             camera_page.load_settings(CameraSettings(kind='area',target_length_mm=120,frame_selector='FrameStart'))
             if any(n['key']=='PreDivider' for n in camera_page.plan['nodes']) or camera_page.controls['ppr'].isEnabled():

@@ -2,17 +2,29 @@
 from dataclasses import asdict
 import json
 from pathlib import Path
-from PySide6.QtCore import Qt,QThread,Signal,QTimer,QRectF
-from PySide6.QtGui import QPainter,QColor,QPen
+from PySide6.QtCore import Qt,QThread,Signal,QTimer,QRectF,QSize
+from PySide6.QtGui import QPainter,QColor,QPen,QPixmap,QIcon,QPainterPath
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,
     QPushButton,QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QCheckBox,QTabWidget,
     QSplitter,QScrollArea,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,
-    QPlainTextEdit,QFileDialog,QProgressBar,QMenu,QGridLayout,QSizePolicy)
+    QPlainTextEdit,QFileDialog,QProgressBar,QMenu,QGridLayout,QSizePolicy,QToolButton,QAbstractSpinBox)
 from styled_controls import make_combo
 from camera_model import CameraSettings,CameraError,calculate,config_dict,settings_from_dict,import_mfs_text,fingerprint,workflow_settings
 from camera_sdk import discover_mvs,enumerate_cameras
 from camera_transaction import inspect_camera,preview_camera,write_camera
 from camera_options import PRESETS,FIELD_LABELS,LABELS,option_label
+from camera_constraints import resolve_fixed_values,within_precision
+
+
+def value_lock_icon(locked):
+    image=QPixmap(20,20);image.fill(Qt.GlobalColor.transparent)
+    painter=QPainter(image);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor('#b5531c' if locked else '#526377'),1.6))
+    painter.setBrush(Qt.BrushStyle.NoBrush);painter.drawRoundedRect(QRectF(4.5,9,11,8),1.5,1.5)
+    path=QPainterPath();path.moveTo(7,9);path.lineTo(7,6)
+    path.cubicTo(7,1.5,14,1.5,14,6);path.lineTo(14,9 if locked else 6)
+    painter.drawPath(path);painter.drawLine(10,12,10,14);painter.end()
+    return QIcon(image)
 
 
 class CameraJob(QThread):
@@ -111,7 +123,9 @@ class ConditionForm:
         if isinstance(widget,QComboBox):
             widget.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             widget.setMinimumContentsLength(8)
-        layout.addWidget(widget)
+        editor=(self.page.lockable_number(widget) if self is getattr(self.page,'parameter_form',None)
+                and isinstance(widget,QAbstractSpinBox) else widget)
+        layout.addWidget(editor)
         span=2 if caption is None else 1
         self.entries.append((widget,cell,span));self.rows[widget]=True
         self.fit()
@@ -163,6 +177,7 @@ class CameraPage(QWidget):
         super().__init__();self.setObjectName('CameraPage')
         self.worker=None;self.preview=None;self.last_report=None;self.geometry=None;self.plan=None;self._loading=False
         self.controls={};self.labels={};self.field_forms={};self.field_titles={};self.property_forms=[];self.input_forms=[];self._input_fit_pending=False;self.language='zh';self.output_caps={}
+        self.fixed_values={};self.lock_buttons={}
         self.sdk=discover_mvs();root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(10)
         tools=QHBoxLayout();tools.addStretch()
         self.language_box=self.styled_combo();self.language_box.addItem('中文','zh');self.language_box.addItem('English','en')
@@ -332,6 +347,58 @@ class CameraPage(QWidget):
         caption=QLabel(label);caption.setWordWrap(True);self.labels[key]=caption;form.addRow(caption,widget)
         return widget
 
+    def lockable_number(self,editor):
+        key=next(key for key,widget in self.controls.items() if widget is editor)
+        editor.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        editor.setStyleSheet('QAbstractSpinBox {border-top-right-radius:0; border-bottom-right-radius:0;}'
+                             'QAbstractSpinBox[vtValueLocked="true"] {background:#edf0f5; color:#526377;}')
+        wrapper=QWidget();wrapper.setMinimumWidth(0)
+        row=QHBoxLayout(wrapper);row.setContentsMargins(0,0,0,0);row.setSpacing(0)
+        row.addWidget(editor,1)
+        button=QToolButton();button.setCheckable(True);button.setFixedSize(34,36);button.setIconSize(QSize(20,20))
+        button.setStyleSheet('QToolButton {background:#f5f7fa; border:1px solid #c8d1dd; border-left:0;'
+                            'border-top-right-radius:7px; border-bottom-right-radius:7px;}'
+                            'QToolButton:hover {background:#e8eef4;} QToolButton:checked {background:#fff0e4;}'
+                            'QToolButton:focus {border-color:#b5531c;}')
+        self.lock_buttons[key]=button;row.addWidget(button)
+        button.toggled.connect(lambda checked,key=key:self.toggle_value_lock(key,checked))
+        button.setIcon(value_lock_icon(False))
+        return wrapper
+
+    def refresh_value_locks(self):
+        for key,button in self.lock_buttons.items():
+            locked=key in self.fixed_values;editor=self.controls[key]
+            editor.setReadOnly(locked)
+            if editor.property('vtValueLocked')!=locked:
+                editor.setProperty('vtValueLocked',locked);editor.style().unpolish(editor);editor.style().polish(editor)
+            button.setIcon(value_lock_icon(locked))
+            name=FIELD_LABELS.get(key,key) if self.language=='en' else self.field_titles[key].split(' / ')[0]
+            text=(('Unlock ' if locked else 'Fix ')+name) if self.language=='en' else (('解除固定：' if locked else '固定数值：')+name)
+            button.setToolTip(text);button.setAccessibleName(text)
+
+    def toggle_value_lock(self,key,locked):
+        if self._loading:return
+        if locked:
+            self.controls[key].interpretText();self.fixed_values[key]=self.controls[key].value()
+        else:self.fixed_values.pop(key,None)
+        self.refresh_value_locks();self.recalculate()
+
+    def clear_value_locks(self):
+        self.fixed_values.clear()
+        for button in self.lock_buttons.values():
+            blocked=button.blockSignals(True);button.setChecked(False);button.blockSignals(blocked)
+        self.refresh_value_locks()
+
+    def set_calculated_value(self,key,value):
+        widget=self.controls[key]
+        if key in self.fixed_values:
+            decimals={key:widget.decimals()}
+            if not within_precision(key,value,self.fixed_values[key],decimals):
+                raise CameraError('固定值冲突：'+self.field_titles[key].split(' / ')[0]+'不能随计算改变，请解除锁定或调整其他条件。')
+            return
+        if not widget.minimum()<=value<=widget.maximum():raise CameraError('计算结果超出输入范围：'+self.field_titles[key])
+        blocked=widget.blockSignals(True);widget.setValue(value);widget.blockSignals(blocked)
+
     def number(self,form,key,label,low,high,decimals,special=None):
         widget=QDoubleSpinBox();widget.setDecimals(decimals);widget.setRange(low,high);widget.setKeyboardTracking(False)
         if special:widget.setSpecialValueText(special)
@@ -374,7 +441,7 @@ class CameraPage(QWidget):
         if self._loading:return
         preset=PRESETS.get(self.camera_type.currentData())
         if not preset:
-            s=self.settings(validate=False);s.camera_model_id='';self.load_settings(s);return
+            s=self.settings(validate=False);s.camera_model_id='';self.load_settings(s,preserve_locks=True);return
         s=self.settings(validate=False)
         if s.framing_source!='legacy':s.framing_source='material'
         for key in ('kind','sensor_width','sensor_height','pixel_pitch_um'):setattr(s,key,preset[key])
@@ -389,7 +456,11 @@ class CameraPage(QWidget):
             s.output4_enabled=False;s.output4_line='Line4';s.output4_source='SoftTriggerActive'
         else:
             s.input_format='';s.output0_enabled=False;s.output4_enabled=False;s.pixel_format='';s.compression=''
-        self.geometry=None;self.output_caps={};self.load_settings(s)
+        for key,value in self.fixed_values.items():
+            if not within_precision(key,getattr(s,key),value,{key:self.controls[key].decimals()}):
+                self.sync_preset();self.preview=None;self.update_actions()
+                self.notify('新相机参数与固定值冲突，请先解除'+self.field_titles[key].split(' / ')[0]+'锁定。',True);return
+        self.geometry=None;self.output_caps={};self.load_settings(s,preserve_locks=True)
 
     def sync_preset(self):
         kind=self.controls['kind'].currentData();width=self.controls['sensor_width'].value();height=self.controls['sensor_height'].value()
@@ -460,8 +531,9 @@ class CameraPage(QWidget):
     def note(form,text):
         label=QLabel(text);label.setWordWrap(True);label.setObjectName('Subtle');form.addRow(label)
 
-    def load_settings(self,settings):
+    def load_settings(self,settings,preserve_locks=False):
         self._loading=True
+        if not preserve_locks:self.clear_value_locks()
         for key,value in asdict(settings).items():
             widget=self.controls[key]
             if isinstance(widget,QCheckBox):widget.setChecked(value)
@@ -489,6 +561,9 @@ class CameraPage(QWidget):
 
     def parameter_changed(self,key):
         if self._loading:return
+        if key in self.fixed_values:
+            widget=self.controls[key];blocked=widget.blockSignals(True)
+            widget.setValue(self.fixed_values[key]);widget.blockSignals(blocked);return
         selector=self.controls['framing_source']
         if selector.currentData()!='legacy':
             source=('distance' if key=='working_distance_mm' else 'material' if key in
@@ -561,6 +636,7 @@ class CameraPage(QWidget):
                 self.field_forms[key].setRowVisible(self.controls[key],False)
         self.sync_preset();self.refresh_output_choices()
         self.form_tabs.setTabVisible(1,line)
+        self.refresh_value_locks()
 
     def toggle_advanced(self,expanded):
         if not expanded and self.form_tabs.currentIndex()>=self.basic_tab_count:self.form_tabs.setCurrentIndex(0)
@@ -682,21 +758,27 @@ class CameraPage(QWidget):
         self.timer.stop();self.preview=None;self.write_button.setEnabled(False)
         try:
             self.enable_fields();limits=self.geometry.get('limits') if self.geometry else None
+            if self.fixed_values:
+                settings=resolve_fixed_values(self.settings(),self.fixed_values,
+                    {key:widget.decimals() for key,widget in self.controls.items() if isinstance(widget,QDoubleSpinBox)},limits)
+                selector=self.controls['framing_source'];blocked=selector.blockSignals(True)
+                selector.setCurrentIndex(selector.findData(settings.framing_source));selector.blockSignals(blocked)
+                for key in ('target_width_mm','working_distance_mm','horizontal_margin_percent'):
+                    self.set_calculated_value(key,getattr(settings,key))
             plan=calculate(self.settings(),limits)
             if plan['settings']['framing_source']!='legacy':
                 key='working_distance_mm' if plan['settings']['framing_source']=='material' else 'x_mm_per_px'
                 widget=self.controls[key];value=plan['metrics'][key]
                 if not widget.minimum()<=value<=widget.maximum():raise CameraError('计算结果超出输入范围，请调整视野或镜头参数。')
-                blocked=widget.blockSignals(True);widget.setValue(value);widget.blockSignals(blocked)
+                self.set_calculated_value(key,value)
                 if plan['settings']['framing_source']=='distance':
-                    widget=self.controls['horizontal_margin_percent'];blocked=widget.blockSignals(True)
-                    widget.setValue(plan['metrics']['horizontal_margin_percent_actual']);widget.blockSignals(blocked)
+                    self.set_calculated_value('horizontal_margin_percent',plan['metrics']['horizontal_margin_percent_actual'])
                 plan=calculate(self.settings(),limits)
             elif plan['settings']['precision_source']=='optics':
                 key='working_distance_mm' if plan['settings']['optics_direction']=='precision_to_wd' else 'x_mm_per_px'
                 value=plan['metrics'][key];widget=self.controls[key]
                 if not widget.minimum()<=value<=widget.maximum():raise CameraError('计算结果超出输入控件范围，请调整镜头或目标精度。')
-                blocked=widget.blockSignals(True);widget.setValue(value);widget.blockSignals(blocked)
+                self.set_calculated_value(key,value)
                 plan=calculate(self.settings(),limits)
             elif plan['settings']['precision_source']=='fov':
                 widget=self.controls['x_mm_per_px'];blocked=widget.blockSignals(True)
