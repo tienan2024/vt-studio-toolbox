@@ -15,6 +15,7 @@ from camera_transaction import inspect_camera,preview_camera,write_camera
 from camera_options import PRESETS,FIELD_LABELS,LABELS,option_label
 from camera_constraints import resolve_fixed_values,within_precision
 from camera_presets import CameraPresetStore
+from camera_snapshot import compare_presets,PAGE_NAMES
 
 
 def value_lock_icon(locked):
@@ -179,12 +180,12 @@ class CameraPage(QWidget):
         self.worker=None;self.preview=None;self.last_report=None;self.geometry=None;self.plan=None;self._loading=False
         self.controls={};self.labels={};self.field_forms={};self.field_titles={};self.property_forms=[];self.input_forms=[];self._input_fit_pending=False;self.language='zh';self.output_caps={}
         self.fixed_values={};self.lock_buttons={}
-        self.preset_store=CameraPresetStore();self.page_preset_controls={}
+        self.preset_store=CameraPresetStore();self.page_preset_controls={};self.snapshot=None
         self.sdk=discover_mvs();root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(10)
         tools=QHBoxLayout();tools.addStretch()
         self.language_box=self.styled_combo();self.language_box.addItem('中文','zh');self.language_box.addItem('English','en')
         tools.addWidget(self.language_box)
-        self.connection_button=self.button('连接与写入相机',lambda:None,tools);self.connection_button.setCheckable(True)
+        self.connection_button=self.button('设备连接',lambda:None,tools);self.connection_button.setCheckable(True)
         self.files_button=self.button('配置与文件',lambda:None,tools);menu=QMenu(self.files_button)
         for title,action in [('打开配置',self.open_config),('保存配置',self.save_config),('读取 MFS',self.open_mfs),('设置 MVS 目录',self.choose_sdk)]:menu.addAction(title,action)
         self.files_button.setMenu(menu);root.addLayout(tools)
@@ -192,8 +193,10 @@ class CameraPage(QWidget):
         self.devices_bar=QWidget();bar=QHBoxLayout(self.devices_bar);bar.setContentsMargins(0,0,0,0)
         self.device=self.styled_combo();self.device.addItem('尚未枚举相机',None);bar.addWidget(self.device,1)
         self.scan_button=self.button('枚举相机',lambda:self.start_job('scan'),bar)
-        self.inspect_button=self.button('读取设备尺寸',lambda:self.start_job('inspect'),bar)
+        self.inspect_button=self.button('读取并对比',lambda:self.start_job('inspect'),bar)
         root.addWidget(self.devices_bar);self.devices_bar.hide()
+        self.device_status=QLabel('尚未读取设备');self.device_status.setObjectName('Subtle');self.device_status.setWordWrap(True)
+        root.addWidget(self.device_status)
         split=QSplitter(Qt.Orientation.Horizontal);root.addWidget(split,1)
         self.form_panel=QWidget();left=QVBoxLayout(self.form_panel);left.setContentsMargins(0,0,10,0);left.setSpacing(8)
         self.camera_type=self.styled_combo()
@@ -315,9 +318,9 @@ class CameraPage(QWidget):
         self.optical_mode.currentIndexChanged.connect(self.optical_mode_changed)
         self.language_box.currentIndexChanged.connect(self.language_changed)
         split.addWidget(self.form_panel)
+        self.result_tabs=QTabWidget();split.addWidget(self.result_tabs)
         right=QWidget();right_layout=QVBoxLayout(right);right_layout.setContentsMargins(8,0,0,0);right_layout.setSpacing(10)
         right_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
-        title=QLabel('计算结果');title.setFixedHeight(28);title.setStyleSheet('font-size:18px;font-weight:600;');right_layout.addWidget(title)
         self.metrics=self.table(['计算项','结果','单位']);self.metrics.setFixedHeight(204);right_layout.addWidget(self.metrics)
         self.optics_summary=QLabel();self.optics_summary.setWordWrap(True);self.optics_summary.setObjectName('Subtle');right_layout.addWidget(self.optics_summary)
         self.frame_preview=FramePreview();right_layout.addWidget(self.frame_preview,1)
@@ -326,21 +329,34 @@ class CameraPage(QWidget):
         self.details_button=self.button('查看参数明细',lambda:None,right_layout);self.details_button.setCheckable(True)
         self.tabs=QTabWidget();right_layout.addWidget(self.tabs,1);self.tabs.hide();self.details_button.toggled.connect(self.toggle_details)
         self.node_table=self.table(['选择器 / 上下文','节点','计划值']);self.tabs.addTab(self.node_table,'节点计划')
-        self.compare_table=self.table(['上下文 / 节点','当前值','目标值','状态']);self.tabs.addTab(self.compare_table,'相机对比')
-        self.log=QPlainTextEdit();self.log.setReadOnly(True);self.tabs.addTab(self.log,'执行记录')
-        self.device_actions=QWidget();actions=QHBoxLayout(self.device_actions);actions.setContentsMargins(0,0,0,0);self.compare_button=self.button('对比相机参数',lambda:self.start_job('compare'),actions)
-        self.export_button=self.button('保存记录',self.export_report,actions);actions.addStretch()
-        self.write_button=self.button('写入并保存 UserSet1',self.start_write,actions);self.write_button.setObjectName('Primary');right_layout.addWidget(self.device_actions);self.device_actions.hide()
+        diff_page=QWidget();diff_layout=QVBoxLayout(diff_page);diff_layout.setContentsMargins(10,10,10,10)
+        filters=QHBoxLayout();self.diff_scope=self.styled_combo();self.diff_scope.addItem('当前参数页',False);self.diff_scope.addItem('全部参数',True);filters.addWidget(self.diff_scope)
+        self.diff_only=QCheckBox('仅看差异');filters.addWidget(self.diff_only);filters.addStretch();diff_layout.addLayout(filters)
+        self.diff_summary=QLabel('选择设备后点击“读取并对比”。');self.diff_summary.setWordWrap(True);diff_layout.addWidget(self.diff_summary)
+        self.adopt_button=self.button('采用设备机型',self.adopt_device_model,filters);self.adopt_button.setEnabled(False)
+        self.preset_table=self.table(['参数 / 上下文','设备当前值','所选预设值','状态']);diff_layout.addWidget(self.preset_table,1)
+        plan_page=QWidget();plan_layout=QVBoxLayout(plan_page);plan_layout.setContentsMargins(10,10,10,10)
+        self.write_status=QLabel('先读取设备，再校验当前设置的计算结果。');self.write_status.setWordWrap(True);plan_layout.addWidget(self.write_status)
+        self.compare_table=self.table(['上下文 / 节点','设备当前值','计算后待写值','校验结果']);plan_layout.addWidget(self.compare_table,1)
+        self.log=QPlainTextEdit();self.log.setReadOnly(True)
+        self.diff_scope.currentIndexChanged.connect(self.refresh_preset_comparison);self.diff_only.toggled.connect(self.refresh_preset_comparison)
+        self.form_tabs.currentChanged.connect(self.refresh_preset_comparison)
         self.connection_button.toggled.connect(self.toggle_connection)
         self.result_scroll=QScrollArea();self.result_scroll.setWidgetResizable(True);self.result_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.result_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);self.result_scroll.setWidget(right)
-        split.addWidget(self.result_scroll);split.setStretchFactor(0,0);split.setStretchFactor(1,1);split.setSizes([455,705])
+        self.result_tabs.addTab(self.result_scroll,'计算结果');self.result_tabs.addTab(diff_page,'预设对比');self.result_tabs.addTab(plan_page,'写入计划');self.result_tabs.addTab(self.log,'执行记录')
+        split.setStretchFactor(0,0);split.setStretchFactor(1,1);split.setSizes([455,705])
+        self.device_actions=QWidget();actions=QHBoxLayout(self.device_actions);actions.setContentsMargins(0,0,0,0)
+        self.export_button=self.button('保存记录',self.export_report,actions);actions.addStretch()
+        self.compare_button=self.button('校验并生成写入计划',lambda:self.start_job('compare'),actions)
+        self.write_button=self.button('写入相机并保存',self.start_write,actions);self.write_button.setObjectName('Primary');root.addWidget(self.device_actions)
         self.form_panel.setMinimumWidth(450)
         self.progress=QProgressBar();self.progress.setFixedHeight(5);self.progress.setTextVisible(False);self.progress.hide();root.addWidget(self.progress)
         self.message=QLabel();self.message.setObjectName('Message');self.message.setWordWrap(True);self.message.setTextFormat(Qt.TextFormat.PlainText);root.addWidget(self.message)
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.timeout.connect(self.recalculate)
         self.device.currentIndexChanged.connect(self.device_changed)
         self.load_settings(workflow_settings());self.notify('按材料尺寸规划；实际无拉伸需用原始产品图或周期走料标定。')
+        self.refresh_preset_comparison();self.connection_button.setChecked(True)
         if self.preset_store.load_error:self.notify('预设文件读取失败，暂用参考预设：'+self.preset_store.load_error,True)
 
     @staticmethod
@@ -350,10 +366,11 @@ class CameraPage(QWidget):
     def add_page_presets(self,form,page):
         bar=QWidget();row=QHBoxLayout(bar);row.setContentsMargins(0,0,0,0);row.setSpacing(8)
         choice=self.styled_combo();choice.setProperty('vtRegularHeight',True);choice.addItems(['预设 1','预设 2']);row.addWidget(choice,1)
-        apply=self.button('应用预设',lambda:self.apply_page_preset(page),row)
+        apply=self.button('载入当前设置',lambda:self.apply_page_preset(page),row)
         save=self.button('保存当前',lambda:self.save_page_preset(page),row)
         choice.setToolTip('两组初始值均参考所提供的相机配置；未提供的工位实测值保持当前输入。')
         self.page_preset_controls[page]=(choice,apply,save);form.addRow(bar);style_control(choice)
+        choice.currentIndexChanged.connect(self.refresh_preset_comparison)
         if isinstance(form,ConditionForm):form.preset_bar=bar
 
     def apply_page_preset(self,page):
@@ -365,14 +382,65 @@ class CameraPage(QWidget):
             if (settings.kind,settings.sensor_width,settings.camera_model_id)!=(before.kind,before.sensor_width,before.camera_model_id):self.geometry=None;self.output_caps={}
             self.load_settings(settings,preserve_locks=page!='material')
             if self.plan is None:return
-            self.notify('已应用本页预设 '+str(slot+1)+'。'+('；'.join(self.plan['blocking']) if self.plan and self.plan['blocking'] else ''))
+            self.notify('已载入本页预设 '+str(slot+1)+'，可继续调整并生成写入计划。'+('；'.join(self.plan['blocking']) if self.plan and self.plan['blocking'] else ''))
         except Exception as exc:self.notify(str(exc),True)
 
     def save_page_preset(self,page):
         try:
             slot=self.page_preset_controls[page][0].currentIndex()
-            self.preset_store.save(page,slot,self.settings(validate=False));self.notify('本页当前值已保存到预设 '+str(slot+1)+'。')
+            self.preset_store.save(page,slot,self.settings(validate=False));self.refresh_preset_comparison();self.notify('本页当前值已保存到预设 '+str(slot+1)+'。')
         except Exception as exc:self.notify('预设保存失败：'+str(exc),True)
+
+    def refresh_preset_comparison(self,*_):
+        if not hasattr(self,'preset_table') or len(self.page_preset_controls)!=6:return
+        pages={page:{'slot':control[0].currentIndex(),'values':self.preset_store.values(page,control[0].currentIndex())}
+               for page,control in self.page_preset_controls.items()}
+        current=list(PAGE_NAMES)[max(0,self.form_tabs.currentIndex())]
+        rows=compare_presets(self.snapshot,pages)
+        self.preset_comparison_report={'schema':'vt-camera-preset-comparison/1','snapshot':self.snapshot,'selected_presets':pages,'rows':rows}
+        if not self.diff_scope.currentData():rows=[r for r in rows if r['page']==current]
+        differences=sum(r['status'] in ('不同','预设超范围') for r in rows)
+        if self.diff_only.isChecked():rows=[r for r in rows if r['status'] not in ('一致','工位计算项','计算或未启用')]
+        source='各页所选预设' if self.diff_scope.currentData() else PAGE_NAMES[current]+' · 预设 '+str(pages[current]['slot']+1)
+        self.diff_summary.setText(source+' · '+('待读取设备' if not self.snapshot else str(differences)+' 项差异'))
+        def display(value):
+            if value is None:return '—'
+            if type(value) is bool:return '启用' if value else '关闭'
+            return option_label(value,self.language) if isinstance(value,str) else str(value)
+        values=[]
+        for r in rows:
+            name=FIELD_LABELS.get(r['field'],r['field']) if self.language=='en' else self.field_titles.get(r['field'],r['field']).split(' / ')[0]
+            if r['entry'] and r['entry']['selectors']:name+=' · '+','.join(str(v) for v in r['entry']['selectors'].values())
+            values.append([name,display(r['before']),display(r['value']),r['status']])
+        self.fill(self.preset_table,values)
+        for i,r in enumerate(rows):
+            detail=PAGE_NAMES[r['page']]+' · 预设 '+str(r['slot']+1)
+            if r['entry']:detail+='\n'+str(r['entry'])
+            if r['detail']:detail+='\n'+r['detail']
+            for j in range(4):self.preset_table.item(i,j).setToolTip(detail+'\n'+self.preset_table.item(i,j).text())
+            if r['status'] in ('不同','预设超范围'):self.preset_table.item(i,3).setForeground(QColor('#9b431b'))
+
+    def invalidate_preview(self):
+        self.preview=None;self.write_button.setEnabled(False);self.compare_table.setRowCount(0)
+        self.write_status.setText('当前设置尚未校验，请生成写入计划。')
+
+    def adopt_device_model(self):
+        if not self.snapshot or self.is_busy():return
+        geometry=self.snapshot['geometry'];model=self.snapshot['device'].get('model','')
+        matched=next((p for p in PRESETS.values() if model==p['model']),None)
+        settings=self.settings(validate=False);scan=geometry.get('scan_type','').lower()
+        if 'line' in scan:settings.kind='line'
+        elif 'area' in scan:settings.kind='area'
+        elif matched:settings.kind=matched['kind']
+        settings.sensor_width=geometry['sensor_width'];settings.camera_model_id=matched['model'] if matched else ''
+        if settings.kind=='area':settings.sensor_height=geometry['sensor_height']
+        settings.frame_selector='FrameBurstStart' if settings.kind=='line' else 'FrameStart'
+        if matched:
+            settings.pixel_pitch_um=matched['pixel_pitch_um'];settings.focal_length_mm=matched['focal_length_mm']
+            if settings.kind=='line':settings.sensor_height=matched['sensor_height']
+        else:settings.pixel_pitch_um=0
+        self.load_settings(settings)
+        self.notify('已带入设备机型和尺寸，请核对镜头、工位参数及接线。')
 
     @staticmethod
     def table(headers):
@@ -534,7 +602,7 @@ class CameraPage(QWidget):
         en=self.language=='en'
         for choice,apply,save in self.page_preset_controls.values():
             choice.setItemText(0,'Preset 1' if en else '预设 1');choice.setItemText(1,'Preset 2' if en else '预设 2')
-            apply.setText('Apply preset' if en else '应用预设');save.setText('Save current' if en else '保存当前')
+            apply.setText('Load settings' if en else '载入当前设置');save.setText('Save current' if en else '保存当前')
         for key,label in self.labels.items():
             original=self.field_titles.get(key,label.text());is_table=isinstance(self.field_forms.get(key),PropertyForm)
             name,_,unit=original.partition(' / ')
@@ -556,7 +624,7 @@ class CameraPage(QWidget):
         for key,caption in self.target_fov_labels.items():
             caption.setText(('Target FOV width / mm' if key=='target_fov_width_mm' else 'Target FOV length / mm') if en else
                             ('视野宽度（目标宽度） / mm' if key=='target_fov_width_mm' else '视野长度（目标长度） / mm'))
-        self.sync_preset();self.refresh_output_choices()
+        self.sync_preset();self.refresh_output_choices();self.refresh_preset_comparison()
 
     def refresh_output_choices(self):
         for prefix in ('output0','output4'):
@@ -627,7 +695,7 @@ class CameraPage(QWidget):
 
     def changed(self,*args):
         if self._loading:return
-        self.preview=None;self.write_button.setEnabled(False);self.timer.start(180)
+        self.invalidate_preview();self.timer.start(180)
 
     def enable_fields(self):
         line=self.controls['kind'].currentData()=='line';source=self.controls['precision_source'].currentData();fov=source=='fov';optics=source=='optics'
@@ -712,7 +780,7 @@ class CameraPage(QWidget):
         QTimer.singleShot(0,self.fit_result_text)
 
     def toggle_connection(self,expanded):
-        self.devices_bar.setVisible(expanded);self.device_actions.setVisible(expanded)
+        self.devices_bar.setVisible(expanded)
         QTimer.singleShot(0,self.fit_result_text)
 
     def showEvent(self,event):
@@ -828,7 +896,7 @@ class CameraPage(QWidget):
         self.summary.setText(message);self.summary.setToolTip('\n'.join(plan['blocking']+plan['warnings']))
 
     def recalculate(self):
-        self.timer.stop();self.preview=None;self.write_button.setEnabled(False)
+        self.timer.stop();self.invalidate_preview()
         try:
             self.enable_fields();limits=self.geometry.get('limits') if self.geometry else None
             if self.fixed_values:
@@ -880,10 +948,14 @@ class CameraPage(QWidget):
         self.inspect_button.setEnabled(selected and not busy);self.compare_button.setEnabled(selected and self.plan is not None and not busy)
         self.write_button.setEnabled(bool(self.preview and self.preview.get('ready')) and not busy)
         self.export_button.setEnabled(self.last_report is not None and not busy)
+        self.adopt_button.setEnabled(self.snapshot is not None and not busy)
+        self.write_button.setToolTip('将本次校验后的计算参数写入相机，保存并加载UserSet1，读回核对并设为默认。' if self.preview and self.preview.get('ready') else '先选择相机并生成有效的写入计划。')
 
     def device_changed(self,*args):
-        self.geometry=None;self.preview=None;self.last_report=None;self.output_caps={}
-        if hasattr(self,'write_button'):self.refresh_output_choices();self.update_actions()
+        self.geometry=None;self.preview=None;self.last_report=None;self.output_caps={};self.snapshot=None
+        if hasattr(self,'write_button'):
+            self.invalidate_preview();self.refresh_output_choices();self.refresh_preset_comparison();self.update_actions()
+            self.device_status.setText('已选择设备，请读取并对比。' if self.selected_uid() else '尚未读取设备')
 
     def choose_sdk(self):
         path=QFileDialog.getExistingDirectory(self,'选择MVS安装目录或MvImport目录',self.sdk)
@@ -895,17 +967,21 @@ class CameraPage(QWidget):
         if self.is_busy():return
         if action!='scan' and not self.selected_uid():self.notify('请先枚举并选择目标相机。',True);return
         try:
+            self.timer.stop()
             if action=='scan':payload={}
-            elif action=='inspect':payload={'uid':self.selected_uid()}
+            elif action=='inspect':
+                self.invalidate_preview();self.snapshot=None;self.refresh_preset_comparison()
+                self.device_status.setText('正在读取设备参数…');payload={'uid':self.selected_uid()}
             else:
-                settings=self.settings();self.preview=None;payload={'uid':self.selected_uid(),'settings':config_dict(settings)}
+                if self.recalculate() is None:raise CameraError(self.message.text())
+                settings=self.settings();self.invalidate_preview();payload={'uid':self.selected_uid(),'settings':config_dict(settings)}
             self.launch(action,payload)
         except Exception as exc:self.notify(str(exc),True)
 
     def start_write(self):
         if self.is_busy() or not self.preview or not self.preview['ready']:return
         if fingerprint(config_dict(self.settings()))!=self.preview['settings_fingerprint']:
-            self.preview=None;self.update_actions();self.notify('配置已变化，请重新对比。',True);return
+            self.invalidate_preview();self.update_actions();self.notify('配置已变化，请重新生成写入计划。',True);return
         self.launch('write',self.preview)
 
     def launch(self,action,payload):
@@ -914,32 +990,23 @@ class CameraPage(QWidget):
         self.form_panel.setEnabled(False);self.devices_bar.setEnabled(False)
         self.files_button.setEnabled(False);self.connection_button.setEnabled(False);self.language_box.setEnabled(False)
         self.compare_button.setEnabled(False);self.write_button.setEnabled(False);self.export_button.setEnabled(False)
-        self.progress.setRange(0,0);self.progress.show();self.notify({'scan':'正在枚举相机…','inspect':'正在读取设备尺寸与范围…','compare':'正在读取选择器分组并对比参数…','write':'正在写入所选相机…'}[action]);self.worker.start()
+        self.adopt_button.setEnabled(False)
+        self.progress.setRange(0,0);self.progress.show();self.notify({'scan':'正在枚举相机…','inspect':'正在读取设备参数并对比预设…','compare':'正在核对设备能力与计算后的写入参数…','write':'正在写入所选相机…'}[action]);self.worker.start()
 
     def finished_result(self,action,data):
         if action=='scan':
             self.device.clear()
             if not data['devices']:self.device.addItem('未发现 GigE / USB3 或对应虚拟相机',None)
             for d in data['devices']:self.device.addItem(d['model']+' · '+d['serial']+' · '+d.get('ip',d['transport']),d['uid'])
-            self.notify('MVS '+data['sdk_version']+'：发现 '+str(len(data['devices']))+' 台相机。'+('请检查供电、网络与设备连接。' if not data['devices'] else '请选择目标后读取设备尺寸。'))
+            self.notify('MVS '+data['sdk_version']+'：发现 '+str(len(data['devices']))+' 台相机。'+('请检查供电、网络与设备连接。' if not data['devices'] else '请选择目标后读取并对比。'))
             self.last_report=data
         elif action=='inspect':
-            self.geometry=data;self.output_caps=data.get('output_source_choices',{});s=self.settings(validate=False);s.sensor_width=data['sensor_width']
-            scan=data.get('scan_type','').lower()
-            if 'line' in scan:s.kind='line'
-            elif 'area' in scan:s.kind='area';s.frame_selector='FrameStart'
-            if s.kind=='area':s.sensor_height=data['sensor_height']
-            model=data['device'].get('model','');matched=next((p for p in PRESETS.values() if model==p['model']),None)
-            s.camera_model_id=matched['model'] if matched else ''
-            if matched:
-                s.pixel_pitch_um=matched['pixel_pitch_um']
-                s.focal_length_mm=matched['focal_length_mm']
-                if s.kind=='line':s.sensor_height=matched['sensor_height']
-            elif s.precision_source=='optics':s.pixel_pitch_um=0
-            if data.get('pixel_format'):s.pixel_format=data['pixel_format']['value']
-            self.load_settings(s);self.notify('已读取 '+data['device']['model']+' / '+data['device']['serial']+'；'+('请核对镜头像元与工位标定。' if not matched else '精度标定沿用工位配置。'))
+            self.geometry=data;self.snapshot=data.get('snapshot');self.output_caps=data.get('output_source_choices',{})
             self.apply_enum_choices('pixel_format',['',*data.get('pixel_format',{}).get('choices',[])])
             for key,choices in data.get('trigger_io_choices',{}).items():self.apply_enum_choices(key,choices)
+            self.refresh_output_choices();self.refresh_preset_comparison();self.result_tabs.setCurrentIndex(1)
+            self.device_status.setText(data['device']['model']+' · '+data['device']['serial']+' · 读取于 '+(self.snapshot['read_at'] if self.snapshot else '本次'))
+            self.notify('设备参数已读取，当前编辑值保留。载入或调整参数后，可生成写入计划。')
             self.log.setPlainText(json.dumps(data,ensure_ascii=False,indent=2))
             self.last_report=data
         elif action=='compare':
@@ -960,15 +1027,21 @@ class CameraPage(QWidget):
             self.log.setPlainText(json.dumps(data,ensure_ascii=False,indent=2))
             def context(e):return ','.join(e['selectors'].values())+' / '+e['key'] if e['selectors'] else e['key']
             self.fill(self.compare_table,[[context(r['entry']),'模式切换后读取' if r['before'] is None else r['before'],r['entry']['value'],r['error'] or r['status']] for r in data['rows']])
-            self.details_button.setChecked(True);self.tabs.setCurrentIndex(1)
-            self.notify('参数对比完成，可写入并保存 UserSet1。' if data['ready'] else '暂不能写入：'+'；'.join(data['errors']),not data['ready'])
+            self.result_tabs.setCurrentIndex(2)
+            self.write_status.setText('校验通过 · '+data['device']['model']+' / '+data['device']['serial']+' · '+str(sum(r['status']=='修改' for r in data['rows']))+' 项修改，可写入相机并保存。' if data['ready'] else '暂不能写入：'+'；'.join(data['errors']))
+            self.notify('写入计划已生成，点击“写入相机并保存”执行。' if data['ready'] else '暂不能写入：'+'；'.join(data['errors']),not data['ready'])
         else:
-            self.last_report=data;self.preview=None;self.log.setPlainText(json.dumps(data,ensure_ascii=False,indent=2));self.details_button.setChecked(True);self.tabs.setCurrentIndex(2)
+            self.last_report=data;self.preview=None;self.snapshot=None;self.refresh_preset_comparison();self.log.setPlainText(json.dumps(data,ensure_ascii=False,indent=2));self.result_tabs.setCurrentIndex(3)
+            self.write_status.setText('写入并读回通过；已保存UserSet1并设为默认。再次修改需重新生成计划。')
+            self.device_status.setText(data['device']['model']+' · '+data['device']['serial']+' · 写入及读回完成')
             self.notify('写入及读回完成；已保存 UserSet1、重新加载核对，并设为默认用户集。')
 
     def failed(self,text,report):
-        self.preview=None
-        if report:self.last_report=report;self.log.setPlainText(json.dumps(report,ensure_ascii=False,indent=2));self.details_button.setChecked(True);self.tabs.setCurrentIndex(2)
+        self.invalidate_preview()
+        self.write_status.setText('操作未完成：'+text)
+        if not self.snapshot:self.device_status.setText('设备操作未完成，请重新读取。')
+        if report:
+            self.snapshot=None;self.refresh_preset_comparison();self.last_report=report;self.log.setPlainText(json.dumps(report,ensure_ascii=False,indent=2));self.result_tabs.setCurrentIndex(3)
         self.notify(text,True)
 
     def stopped(self):
@@ -1008,5 +1081,7 @@ class CameraPage(QWidget):
         if self.last_report is None:return
         path,_=QFileDialog.getSaveFileName(self,'保存参数对比或执行记录','camera-record.json','JSON (*.json)')
         if path:
-            try:Path(path).write_text(json.dumps(self.last_report,ensure_ascii=False,indent=2),encoding='utf-8');self.notify('记录已保存：'+path)
+            try:
+                report=self.preset_comparison_report if self.result_tabs.currentIndex()==1 and self.snapshot else self.last_report
+                Path(path).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8');self.notify('记录已保存：'+path)
             except Exception as exc:self.notify(str(exc),True)

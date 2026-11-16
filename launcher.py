@@ -376,6 +376,13 @@ def verify_package(report_path):
             camera_page.apply_page_preset('trigger');camera_page.preset_store=original_store
             if camera_page.settings().line_source!='FrequencyConverter':raise RuntimeError('Camera page preset did not restore reference trigger source')
             report.update(camera_page_presets=True,camera_editable_line_source=True)
+            if camera_page.device_actions.isHidden() or camera_page.result_tabs.count()!=4 or camera_page.inspect_button.text()!='读取并对比':
+                raise RuntimeError('Frozen camera read/compare/write actions are not directly accessible')
+            from camera_snapshot import compare_presets
+            raw_rows=compare_presets(None,{'trigger':{'slot':0,'values':{'frame_selector':'FrameBurstStart','frame_line':'Line3'}}})
+            if next(r for r in raw_rows if r['field']=='frame_line')['status']!='未读取':
+                raise RuntimeError('Preset comparison must remain independent of calculation')
+            report['camera_read_compare_write_workflow']=True
             report['camera_cycle_capacity']=True;report['camera_measured_cycle']=True
             if camera_page.controls['working_distance_mm'].isHidden() or not camera_page.controls['working_distance_mm'].isEnabled() or not camera_page.controls['framing_source'].isHidden():
                 raise RuntimeError('Frozen automatic camera input layout failed')

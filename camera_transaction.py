@@ -144,9 +144,11 @@ def preview_camera(uid,settings,directory=None):
 
 
 def inspect_camera(uid,directory=None):
+    from camera_snapshot import read_snapshot
     with open_camera(uid,directory) as camera:
         geometry=camera.geometry();line='area' not in geometry.get('scan_type','').lower()
         return {'device':camera.device,**geometry,'observed_trigger_state':observe_trigger_state(camera,line=line),
+                'snapshot':read_snapshot(camera,geometry),
                 'output_source_choices':read_output_sources(camera),'trigger_io_choices':read_trigger_ios(camera,line)}
 
 
