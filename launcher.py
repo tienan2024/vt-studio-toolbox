@@ -384,11 +384,17 @@ def verify_package(report_path):
                 raise RuntimeError('Preset comparison must remain independent of calculation')
             report['camera_read_compare_write_workflow']=True
             original_camera_settings=camera_page.settings(validate=False)
+            original_model_store=camera_page.preset_store;camera_page.preset_store=CameraPresetStore(root/'TEST_ONLY_model_presets.json')
             camera_page.finished_result('scan',{'sdk_version':'package-check','devices':[
                 {'uid':'package-check:mono','model':'MV-CL024-91GM','serial':'TEST','transport':'GigE'}]})
             if camera_page.camera_type.currentData()!='line2k' or camera_page.camera_type.isEnabled():
                 raise RuntimeError('Frozen camera model did not follow the selected device')
+            model=camera_page.preset_model();image_preset=camera_page.preset_store.values('imaging',0,model)
+            if model not in camera_page.page_preset_controls['imaging'][0].currentText() or image_preset.get('gain')!=0 or image_preset.get('width_override')!=0:
+                raise RuntimeError('CL024 presets must be named and isolated from CL042 MFS values')
+            report['camera_model_presets']=True
             camera_page.finished_result('scan',{'sdk_version':'package-check','devices':[]})
+            camera_page.preset_store=original_model_store
             camera_page.load_settings(original_camera_settings)
             report['camera_auto_device_model']=True
             from diagnostic_log import setup_logging,snapshot

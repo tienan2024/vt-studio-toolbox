@@ -14,7 +14,7 @@ from camera_sdk import discover_mvs,enumerate_cameras
 from camera_transaction import inspect_camera,preview_camera,write_camera
 from camera_options import PRESETS,FIELD_LABELS,LABELS,option_label,model_identity,model_preset
 from camera_constraints import resolve_fixed_values,within_precision
-from camera_presets import CameraPresetStore
+from camera_presets import CameraPresetStore,model_key
 from camera_snapshot import compare_presets,PAGE_NAMES
 
 
@@ -183,7 +183,8 @@ class CameraPage(QWidget):
         self.worker=None;self.preview=None;self.last_report=None;self.geometry=None;self.plan=None;self._loading=False
         self.controls={};self.labels={};self.field_forms={};self.field_titles={};self.property_forms=[];self.input_forms=[];self._input_fit_pending=False;self.language='zh';self.output_caps={}
         self.fixed_values={};self.lock_buttons={}
-        self.preset_store=CameraPresetStore();self.page_preset_controls={};self.snapshot=None;self.device_records={}
+        self.preset_store=CameraPresetStore();self.page_preset_controls={};self.preset_rename_buttons={}
+        self._preset_model=None;self.preset_selections={};self.snapshot=None;self.device_records={}
         self.sdk=discover_mvs();root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(10)
         tools=QHBoxLayout();tools.addStretch()
         self.language_box=self.styled_combo();self.language_box.addItem('中文','zh');self.language_box.addItem('English','en')
@@ -362,51 +363,90 @@ class CameraPage(QWidget):
         self.device.currentIndexChanged.connect(self.device_changed)
         self.load_settings(workflow_settings());self.notify('按材料尺寸规划；实际无拉伸需用原始产品图或周期走料标定。')
         self.refresh_preset_comparison();self.connection_button.setChecked(True)
-        if self.preset_store.load_error:self.notify('预设文件读取失败，暂用参考预设：'+self.preset_store.load_error,True)
+        if self.preset_store.load_error:self.notify('预设文件读取失败，暂用本机型基础配置：'+self.preset_store.load_error,True)
+        elif self.preset_store.load_notice:self.notify(self.preset_store.load_notice)
 
     @staticmethod
     def button(text,slot,layout):
         result=QPushButton(text);result.clicked.connect(slot);layout.addWidget(result);return result
 
     def add_page_presets(self,form,page):
-        bar=QWidget();row=QHBoxLayout(bar);row.setContentsMargins(0,0,0,0);row.setSpacing(8)
-        choice=self.styled_combo();choice.setProperty('vtRegularHeight',True);choice.addItems(['预设 1','预设 2']);row.addWidget(choice,1)
+        bar=QWidget();layout=QVBoxLayout(bar);layout.setContentsMargins(0,0,0,0);layout.setSpacing(8)
+        choice=self.styled_combo();choice.setProperty('vtRegularHeight',True)
+        for slot in range(2):choice.addItem('',slot)
+        choice.setAccessibleName(PAGE_NAMES[page]+'预设');layout.addWidget(choice)
+        row=QHBoxLayout();row.setSpacing(8);layout.addLayout(row)
         apply=self.button('载入当前设置',lambda:self.apply_page_preset(page),row)
         save=self.button('保存当前',lambda:self.save_page_preset(page),row)
-        choice.setToolTip('两组初始值均参考所提供的相机配置；未提供的工位实测值保持当前输入。')
+        self.preset_rename_buttons[page]=self.button('重命名',lambda:self.rename_page_preset(page),row);row.addStretch()
         self.page_preset_controls[page]=(choice,apply,save);form.addRow(bar);style_control(choice)
         choice.currentIndexChanged.connect(self.refresh_preset_comparison)
         if isinstance(form,ConditionForm):form.preset_bar=bar
 
+    def preset_model(self):
+        device=self.connected_device()
+        return device['model'] if device else self.controls['camera_model_id'].text()
+
+    def refresh_preset_choices(self,force=False):
+        if len(self.page_preset_controls)!=6:return
+        model=self.preset_model();key=model_key(model)
+        if not force and self._preset_model==key and getattr(self,'_preset_store_id',None)==id(self.preset_store):return
+        if self._preset_model is not None:
+            self.preset_selections[self._preset_model]={p:control[0].currentIndex() for p,control in self.page_preset_controls.items()}
+        slots=self.preset_selections.get(key,{})
+        for page,(choice,_,_) in self.page_preset_controls.items():
+            blocked=choice.blockSignals(True)
+            for slot in range(2):
+                label=self.preset_store.label(page,slot,model);choice.setItemText(slot,label)
+                choice.setItemData(slot,PAGE_NAMES[page]+' · '+label,Qt.ItemDataRole.ToolTipRole)
+            choice.setCurrentIndex(slots.get(page,0));choice.setToolTip(choice.currentText()+'\n'+PAGE_NAMES[page])
+            choice.blockSignals(blocked)
+        self._preset_model=key;self._preset_store_id=id(self.preset_store);self.refresh_preset_comparison()
+
+    def rename_page_preset(self,page):
+        from PySide6.QtWidgets import QInputDialog
+        model=self.preset_model();slot=self.page_preset_controls[page][0].currentIndex()
+        name,ok=QInputDialog.getText(self,'重命名预设',self.preset_store.label(page,slot,model),text=self.preset_store.name(page,slot,model))
+        if not ok:return
+        try:
+            self.preset_store.rename(page,slot,model,name);self.refresh_preset_choices(True)
+            self.notify('预设名称已保存：'+self.preset_store.label(page,slot,model))
+        except Exception as exc:self.notify('重命名失败：'+str(exc),True)
+
     def apply_page_preset(self,page):
         try:
             slot=self.page_preset_controls[page][0].currentIndex();before=self.settings(validate=False)
-            settings=self.match_device_settings(replace(before,**self.preset_store.values(page,slot)))
+            model=self.preset_model();values=self.preset_store.values(page,slot,model)
+            if not values:self.notify('本机型尚无'+PAGE_NAMES[page]+'预设内容，请先配置并保存当前页。');return
+            settings=self.match_device_settings(replace(before,**values))
             if page=='imaging' and settings.width_override+settings.offset_x>settings.sensor_width:
-                raise CameraError('参考ROI超出当前相机宽度，请先在材料页应用参考相机，或保存适合当前相机的预设。')
+                raise CameraError('本页预设ROI超出当前相机宽度，请调整后保存为该机型预设。')
             if (settings.kind,settings.sensor_width,settings.camera_model_id)!=(before.kind,before.sensor_width,before.camera_model_id):self.geometry=None;self.output_caps={}
             self.load_settings(settings,preserve_locks=page!='material')
             if self.plan is None:return
-            self.notify('已载入本页预设 '+str(slot+1)+'，可继续调整并生成写入计划。'+('；'.join(self.plan['blocking']) if self.plan and self.plan['blocking'] else ''))
+            self.notify('已载入 '+self.preset_store.label(page,slot,model)+'。'+('；'.join(self.plan['blocking']) if self.plan and self.plan['blocking'] else '可继续调整并生成写入计划。'))
         except Exception as exc:self.notify(str(exc),True)
 
     def save_page_preset(self,page):
         try:
             slot=self.page_preset_controls[page][0].currentIndex()
-            self.preset_store.save(page,slot,self.settings(validate=False));self.refresh_preset_comparison();self.notify('本页当前值已保存到预设 '+str(slot+1)+'。')
+            model=self.preset_model();self.preset_store.save(page,slot,self.settings(validate=False),model)
+            self.refresh_preset_choices(True);self.notify('已保存 '+self.preset_store.label(page,slot,model)+' · '+PAGE_NAMES[page]+'。')
         except Exception as exc:self.notify('预设保存失败：'+str(exc),True)
 
     def refresh_preset_comparison(self,*_):
         if not hasattr(self,'preset_table') or len(self.page_preset_controls)!=6:return
-        pages={page:{'slot':control[0].currentIndex(),'values':self.preset_store.values(page,control[0].currentIndex())}
+        model=self.preset_model()
+        for page,(choice,_,_) in self.page_preset_controls.items():choice.setToolTip(PAGE_NAMES[page]+' · '+choice.currentText())
+        pages={page:{'slot':control[0].currentIndex(),'model':model,'name':self.preset_store.name(page,control[0].currentIndex(),model),'values':self.preset_store.values(page,control[0].currentIndex(),model)}
                for page,control in self.page_preset_controls.items()}
         current=list(PAGE_NAMES)[max(0,self.form_tabs.currentIndex())]
         rows=compare_presets(self.snapshot,pages)
-        self.preset_comparison_report={'schema':'vt-camera-preset-comparison/1','snapshot':self.snapshot,'selected_presets':pages,'rows':rows}
+        self.preset_comparison_report={'schema':'vt-camera-preset-comparison/1','model':model,'snapshot':self.snapshot,'selected_presets':pages,'rows':rows}
         if not self.diff_scope.currentData():rows=[r for r in rows if r['page']==current]
-        differences=sum(r['status'] in ('不同','预设超范围') for r in rows)
+        differences=sum(r['status'] in ('不同','预设超范围','预设机型不匹配') for r in rows)
         if self.diff_only.isChecked():rows=[r for r in rows if r['status'] not in ('一致','工位计算项','计算或未启用')]
-        source='各页所选预设' if self.diff_scope.currentData() else PAGE_NAMES[current]+' · 预设 '+str(pages[current]['slot']+1)
+        source=(model or '自定义机型')+' · '+('各页所选预设' if self.diff_scope.currentData() else PAGE_NAMES[current]+' · '+pages[current]['name'])
         self.diff_summary.setText(source+' · '+('待读取设备' if not self.snapshot else str(differences)+' 项差异'))
         def display(value):
             if value is None:return '—'
@@ -419,11 +459,11 @@ class CameraPage(QWidget):
             values.append([name,display(r['before']),display(r['value']),r['status']])
         self.fill(self.preset_table,values)
         for i,r in enumerate(rows):
-            detail=PAGE_NAMES[r['page']]+' · 预设 '+str(r['slot']+1)
+            detail=PAGE_NAMES[r['page']]+' · '+self.preset_store.label(r['page'],r['slot'],model)
             if r['entry']:detail+='\n'+str(r['entry'])
             if r['detail']:detail+='\n'+r['detail']
             for j in range(4):self.preset_table.item(i,j).setToolTip(detail+'\n'+self.preset_table.item(i,j).text())
-            if r['status'] in ('不同','预设超范围'):self.preset_table.item(i,3).setForeground(QColor('#9b431b'))
+            if r['status'] in ('不同','预设超范围','预设机型不匹配'):self.preset_table.item(i,3).setForeground(QColor('#9b431b'))
 
     def invalidate_preview(self):
         self.preview=None;self.write_button.setEnabled(False);self.compare_table.setRowCount(0)
@@ -611,6 +651,7 @@ class CameraPage(QWidget):
         pitch=self.controls['pixel_pitch_um'].value()
         self.camera_info.setText(spec+(' · '+str(pitch)+' μm' if pitch else ' · 像元待填写')+('\n'+preset['lens_model']+' · '+str(preset['focal_length_mm'])+' mm' if preset else ' · 自定义 / 设备读回'))
         self.camera_info.setToolTip(preset['source'] if preset else '配置未匹配完整型号；固定参数可在工位标定中编辑。')
+        self.refresh_preset_choices()
 
     def optical_mode_changed(self,*args):
         if self._loading:return
@@ -628,8 +669,9 @@ class CameraPage(QWidget):
     def translate_options(self):
         en=self.language=='en'
         for choice,apply,save in self.page_preset_controls.values():
-            choice.setItemText(0,'Preset 1' if en else '预设 1');choice.setItemText(1,'Preset 2' if en else '预设 2')
             apply.setText('Load settings' if en else '载入当前设置');save.setText('Save current' if en else '保存当前')
+        for button in self.preset_rename_buttons.values():button.setText('Rename' if en else '重命名')
+        self.refresh_preset_choices(True)
         for key,label in self.labels.items():
             original=self.field_titles.get(key,label.text());is_table=isinstance(self.field_forms.get(key),PropertyForm)
             name,_,unit=original.partition(' / ')

@@ -4,6 +4,7 @@ import re
 from camera_model import node_id
 from camera_sdk import NodeUnavailable
 from camera_presets import PAGE_KEYS
+from camera_options import model_identity
 from camera_transaction import selectors, same, validate_value
 
 PAGE_NAMES=dict(zip(PAGE_KEYS,('材料与视野','编码器与图高','采集触发','数字 IO','专业标定','成像')))
@@ -94,6 +95,9 @@ def compare_presets(snapshot,pages):
         for field in PAGE_KEYS[page]:
             row={'page':page,'slot':spec['slot'],'field':field,'entry':None,'before':None,
                 'value':spec['values'].get(field),'status':'预设未设置','detail':''}
+            if snapshot and spec.get('model') and model_identity(spec['model'])!=model_identity(snapshot['device'].get('model')):
+                row.update(status='预设机型不匹配',detail='预设属于 '+spec['model']+'，设备为 '+str(snapshot['device'].get('model')))
+                rows.append(row);continue
             if field not in spec['values']:rows.append(row);continue
             value=row['value'];entries=preset_entries(field,value,stored)
             if entries is None:

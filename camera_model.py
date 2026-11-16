@@ -151,7 +151,7 @@ def workflow_settings():
         focal_length_mm=12,pixel_pitch_um=7,precision_source='optics',
         framing_source='material',horizontal_margin_percent=10,vertical_margin_percent=2,target_width_mm=200,target_length_mm=400,
         frequency_strategy='cycle',auto_frequency=True,line_y_source='square',height_rounding=100,
-        cycle_idle_lines=100,ppr=1000,edge_factor=1,encoder_revs=1,pixel_format='',products_per_minute=300,frequency_tolerance_percent=15)
+        cycle_idle_lines=100,ppr=1000,edge_factor=1,encoder_revs=1,pixel_format='',gain=0,products_per_minute=300,frequency_tolerance_percent=15)
 
 
 def settings_from_dict(value):
