@@ -2,10 +2,16 @@
 from contextlib import contextmanager
 from dataclasses import replace
 import math
+import time
 from camera_model import (CameraError,calculate,settings_from_dict,node_id,fingerprint)
 from camera_sdk import open_camera,NodeUnavailable
 from diagnostic_log import event,snapshot
 from camera_options import model_identity
+
+# Same-device A/B evidence supplied on 2026-11-16: immediate Load loses the
+# pending Save on CL024-91GM; a 3-second interval survives reload. Other models
+# still require the existing full readback verification; this is not IsDone.
+USER_SET_SAVE_DELAY_S=3.0
 
 
 class CameraWriteError(CameraError):
@@ -306,7 +312,13 @@ def apply_comparison(camera,preview,progress=None):
             verify_all('before_save');report['observed_before_save']=_verify_capacity(camera,settings);select.restore();select.original.clear()
             notify('运行参数已读回，正在保存 UserSet1…')
             camera.write('UserSetSelector','enum','UserSet1');persist_started=True;report['persistent_may_have_changed']=True
-            camera.command('UserSetSave');camera.command('UserSetLoad');verify_all('after_reload');report['observed_after_reload']=_verify_capacity(camera,settings)
+            camera.command('UserSetSave')
+            report['user_set_save_delay_s']=USER_SET_SAVE_DELAY_S
+            notify('保存命令已发送，等待3秒后重新加载并核对…')
+            event('camera.transaction','user_set_save_wait_started',seconds=USER_SET_SAVE_DELAY_S)
+            time.sleep(USER_SET_SAVE_DELAY_S)
+            event('camera.transaction','user_set_save_wait_finished',seconds=USER_SET_SAVE_DELAY_S)
+            camera.command('UserSetLoad');verify_all('after_reload');report['observed_after_reload']=_verify_capacity(camera,settings)
             select.restore();select.original.clear()
             camera.write('UserSetDefault','enum','UserSet1')
             if camera.read('UserSetDefault','enum')['value']!='UserSet1':raise CameraError('默认用户集读回不一致。')

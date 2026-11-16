@@ -405,6 +405,9 @@ def verify_package(report_path):
             if not any('MFA' in action.text() for action in camera_page.files_button.menu().actions()):
                 raise RuntimeError('MFA import entry missing')
             report['camera_mfa_import']=True
+            from camera_transaction import USER_SET_SAVE_DELAY_S
+            if USER_SET_SAVE_DELAY_S!=3.0:raise RuntimeError('Production UserSet Save delay missing')
+            report['camera_save_delay']=True
             from diagnostic_log import setup_logging,snapshot
             debug_store=setup_logging();debug_path=snapshot('package-check',{'test_only':True})
             if not debug_store or not debug_path.is_file() or 'camera' not in toolbox.diagnostic_state():
