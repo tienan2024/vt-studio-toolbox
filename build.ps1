@@ -31,7 +31,7 @@ $vtReport = Get-Content -LiteralPath $vtReportPath -Raw -Encoding UTF8 | Convert
 if (-not $vtReport.script_editable_ports -or -not $vtReport.script_variable_groups -or -not $vtReport.sol_readonly_ports) {
     throw "变量编辑、输入输出分组或 SOL 只读提取验证失败。"
 }
-if (-not $vtReport.sol_apply_adapter_available -or -not $vtReport.camera_page -or -not $vtReport.camera_calculation -or
+if (-not $vtReport.startup_single_window -or -not $vtReport.sol_apply_adapter_available -or -not $vtReport.camera_page -or -not $vtReport.camera_calculation -or
     -not $vtReport.camera_area_plan -or -not $vtReport.camera_write_guard -or -not $vtReport.camera_simple_default -or
     -not $vtReport.camera_background_margins -or -not $vtReport.camera_optical_estimate -or
     -not $vtReport.camera_styled_controls -or -not $vtReport.shared_controls_four_pages -or

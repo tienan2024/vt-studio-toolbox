@@ -112,7 +112,7 @@ class ConditionForm:
         page.form_tabs.addTab(self.scroll,title);page.input_forms.append(self)
 
     def addRow(self,caption,widget=None):
-        cell=QWidget();layout=QVBoxLayout(cell);layout.setContentsMargins(0,0,0,0);layout.setSpacing(6)
+        cell=QWidget(self.widget);layout=QVBoxLayout(cell);layout.setContentsMargins(0,0,0,0);layout.setSpacing(6)
         if widget is None:
             widget=caption;caption=None
         if caption is not None:

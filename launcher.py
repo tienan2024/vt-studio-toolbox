@@ -18,7 +18,7 @@ def verify_package(report_path):
         import numpy as np
         from PIL import Image
         from PySide6 import QtCore,QtGui
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication,QWidget
         from toolbox import ToolboxWindow
         from engine import load_gray, load_image, VERSION
         report['qt_version'] = QtCore.qVersion()
@@ -39,9 +39,19 @@ def verify_package(report_path):
             report['loaded_modules'] = modules
         app = QApplication.instance() or QApplication([])
         app.setStyle('Fusion')
+        startup_shows=[]
+        class StartupProbe(QtCore.QObject):
+            def eventFilter(self,obj,event):
+                if isinstance(obj,QWidget) and obj.isWindow() and event.type()==QtCore.QEvent.Type.Show:startup_shows.append(obj.metaObject().className())
+                return False
+        startup_probe=StartupProbe();app.installEventFilter(startup_probe)
         toolbox = ToolboxWindow()
+        if startup_shows:raise RuntimeError('Unexpected top-level windows during construction: '+str(startup_shows))
         toolbox.show()
         toolbox.select_page(1)
+        app.processEvents();app.removeEventFilter(startup_probe)
+        if startup_shows!=['ToolboxWindow']:raise RuntimeError('Unexpected windows during startup: '+str(startup_shows))
+        report['startup_single_window']=True
         window = toolbox.defect
 
         def wait_worker(target):
