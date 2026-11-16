@@ -1,4 +1,4 @@
-# VT STUDIO 图像工具箱 · 7.14.0
+# VT STUDIO 图像工具箱 · 7.15.0
 
 最后更新：2026-11-16
 
@@ -8,9 +8,9 @@
 
 ## 打开工具
 
-GitHub仓库：[tienan2024/vt-studio-toolbox](https://github.com/tienan2024/vt-studio-toolbox)。6.5使用矩形XML；7.14.0包含多边形XML、脚本生成/测试、SOL应用和相机参数，发布版本以Release版本号为准。直接使用请从 [Releases](https://github.com/tienan2024/vt-studio-toolbox/releases) 下载Windows便携包，解压后运行VTStudioToolbox.exe；VTStudioCLI.exe供AI与脚本调用。源码仓库包含必要的原转换核心，不包含Python环境、生产图片、本机验证目录或构建产物。
+GitHub仓库：[tienan2024/vt-studio-toolbox](https://github.com/tienan2024/vt-studio-toolbox)。6.5使用矩形XML；7.15.0包含多边形XML、脚本生成/测试、SOL应用和相机参数，发布版本以Release版本号为准。直接使用请从 [Releases](https://github.com/tienan2024/vt-studio-toolbox/releases) 下载Windows便携包，解压后运行VTStudioToolbox.exe；VTStudioCLI.exe供AI与脚本调用。源码仓库包含必要的原转换核心，不包含Python环境、生产图片、本机验证目录或构建产物。
 
-优先双击桌面“VT STUDIO 工具箱”快捷方式。7.14.0独立包位于 `D:/CodexBuilds/vt-studio-toolbox/7.14.0/VTStudioToolbox/VTStudioToolbox.exe`（源码的release/7.14.0入口通过目录联接保留），启动脚本优先打开新版，旧窗口和旧包保留。便携版需保留整个文件夹及_internal，不能只复制EXE。
+优先双击桌面“VT STUDIO 工具箱”快捷方式。7.15.0独立包位于 `D:/CodexBuilds/vt-studio-toolbox/7.15.0/VTStudioToolbox/VTStudioToolbox.exe`（源码的release/7.15.0入口通过目录联接保留），启动脚本优先打开新版，旧窗口和旧包保留。便携版需保留整个文件夹及_internal，不能只复制EXE。
 
 源码启动：
 
@@ -32,6 +32,8 @@ python app.py
 6.9新增“应用脚本到 SOL”：选定流程/脚本后，查看目标和变量差异，由本机VM SDK导入、原生编译、独立重载并另存新方案；沿用原绑定，保留非目标模块与原文件。受保护方案密码仅本次使用。详见[SOL脚本自动应用](docs/12-SOL脚本自动应用.md)。
 
 ## 相机参数
+
+7.15修复触发占用线路时LineMode只读导致的预检阻塞：标为关闭帧/行触发后再校验，实际写入先关触发、改IO，再按依赖顺序开启目标触发；失败恢复先恢复IO再恢复触发。侧栏“调试日志”提供全局记录、自动错误状态、手动JSON/截图和调试包导出，见[调试日志与快照](docs/17-调试日志与快照.md)。
 
 7.14以设备写入为主要流程：枚举 → 读取并对比 → 载入或调整当前设置 → 校验并生成写入计划 → 写入相机并保存。右侧直接显示计算结果、预设对比、写入计划和执行记录；底部写入入口常驻。预设只负责填入当前页，写入使用计算及设备能力校验后的计划。设备读取保留当前编辑值和固定状态，预设对比不要求先完成材料/走料计算。
 

@@ -15,9 +15,14 @@ class SolJob(QThread):
         super().__init__(parent);self.path=path;self.password=password
 
     def run(self):
-        try:self.result.emit(read_sol(self.path,self.password))
-        except SolPasswordError as exc:self.failed.emit(str(exc),True)
-        except Exception as exc:self.failed.emit('SOL读取失败：'+str(exc),False)
+        from diagnostic_log import event
+        event('sol','read_started',path=self.path)
+        try:
+            data=read_sol(self.path,self.password);event('sol','read_finished',path=self.path);self.result.emit(data)
+        except SolPasswordError as exc:
+            event('sol','read_password_failed',error=str(exc),error_event=True);self.failed.emit(str(exc),True)
+        except Exception as exc:
+            event('sol','read_failed',error=str(exc),error_event=True);self.failed.emit('SOL读取失败：'+str(exc),False)
         finally:self.password=None
 
 

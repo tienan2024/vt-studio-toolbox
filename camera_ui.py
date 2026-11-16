@@ -36,13 +36,16 @@ class CameraJob(QThread):
 
     def __init__(self,action,payload,sdk,parent):super().__init__(parent);self.action=action;self.payload=payload;self.sdk=sdk
     def run(self):
+        from diagnostic_log import event,exception
+        event('camera','job_started',action=self.action)
         try:
             if self.action=='scan':data=enumerate_cameras(self.sdk)
             elif self.action=='inspect':data=inspect_camera(self.payload['uid'],self.sdk)
             elif self.action=='compare':data=preview_camera(self.payload['uid'],settings_from_dict(self.payload['settings']),self.sdk)
             else:data=write_camera(self.payload,self.sdk,self.progress.emit)
             self.result.emit(self.action,data)
-        except Exception as exc:self.failed.emit(str(exc),getattr(exc,'report',None))
+        except Exception as exc:
+            exception('camera','job_failed',exc,action=self.action);self.failed.emit(str(exc),getattr(exc,'report',None))
 
 
 class FramePreview(QWidget):
@@ -284,6 +287,9 @@ class CameraPage(QWidget):
         self.combo(io,'output_mode','输出模式',[('频闪','Strobe'),('输出','Output')])
         self.check(io,'strobe_enable','启用频闪')
         self.integer(io,'strobe_duration_us','输出 2 脉宽 / μs',0,100000000)
+        self.io_capabilities=self.table(['线路','当前模式','访问','支持模式'])
+        self.io_capabilities.setFixedHeight(175);self.io_capabilities.hide()
+        io.table.parentWidget().layout().insertWidget(1,self.io_capabilities)
         self.text(image,'device_name','相机名称 DeviceUserID')
         self.number(image,'exposure_us','曝光 / μs',.01,100000000,3)
         self.number(image,'gain','增益 Gain',0,10000,4)
@@ -638,6 +644,22 @@ class CameraPage(QWidget):
             widget.setToolTip(('Read from camera' if self.language=='en' else '已从相机读取支持的枚举') if cap.get('status')=='readable' else ('Reference values; confirm on device' if self.language=='en' else '参考配置选项；连接后按设备能力核对'))
             if cap.get('status')=='readable' and current not in cap.get('choices',[]):
                 widget.setToolTip('Configured value is not supported; select a device option.' if self.language=='en' else '当前配置值不在设备支持列表中，请选择设备选项。')
+        if not hasattr(self,'io_capabilities'):return
+        modes=[cap.get('mode',{}) for prefix in ('output0','output4') if self.controls[prefix+'_enabled'].isChecked()
+               for cap in [self.output_caps.get(self.controls[prefix+'_line'].currentData(),{})] if cap.get('mode',{}).get('status')=='readable']
+        if modes:
+            # Locked banks may expose only their current enum. Preserve reference
+            # output choices until the write transaction disables both triggers.
+            choices=['Strobe','Output'] if any(not m['writable'] for m in modes) else [v for v in modes[0]['choices'] if v in ('Output','Strobe') and all(v in m['choices'] for m in modes)]
+            widget=self.controls['output_mode'];current=widget.currentData();blocked=widget.blockSignals(True);widget.clear()
+            for value in dict.fromkeys([*choices,current]):widget.addItem(option_label(value,self.language),value)
+            widget.setCurrentIndex(widget.findData(current));widget.blockSignals(blocked)
+            widget.setToolTip('按所选输出线路的设备支持模式选择；当前只读可能由触发占用，写入时先关闭触发再校验。')
+        rows=[]
+        for line,cap in self.output_caps.items():
+            mode=cap.get('mode',{})
+            if mode.get('status')=='readable':rows.append([line,option_label(mode['value'],self.language),'可修改' if mode['writable'] else '当前只读',' / '.join(mode['choices'])])
+        self.fill(self.io_capabilities,rows);self.io_capabilities.setVisible(bool(rows))
 
     def apply_enum_choices(self,key,choices):
         if not choices:return
@@ -1013,9 +1035,12 @@ class CameraPage(QWidget):
             self.sync_frequency(data['plan'])
             self.preview=data;self.last_report=data;self.geometry=data['geometry'];self.render_plan(data['plan'])
             for row in data['rows']:
+                if row['entry']['key']=='LineMode' and row.get('capability'):
+                    cap=row['capability'];line=row['entry']['selectors'].get('LineSelector')
+                    self.output_caps.setdefault(line,{})['mode']={'status':'readable',**cap}
                 if row['entry']['key']=='LineSource' and row.get('capability'):
                     cap=row['capability'];line=row['entry']['selectors'].get('LineSelector')
-                    self.output_caps[line]={'status':'readable','choices':cap.get('choices',[]),'value':cap['value'],'writable':cap['writable']}
+                    self.output_caps.setdefault(line,{}).update(status='readable',choices=cap.get('choices',[]),value=cap['value'],writable=cap['writable'])
                 if row.get('capability'):
                     key=row['entry']['key'];choices=row['capability'].get('choices',[])
                     if key=='PixelFormat':self.apply_enum_choices('pixel_format',['',*choices])
@@ -1026,12 +1051,13 @@ class CameraPage(QWidget):
             self.refresh_output_choices()
             self.log.setPlainText(json.dumps(data,ensure_ascii=False,indent=2))
             def context(e):return ','.join(e['selectors'].values())+' / '+e['key'] if e['selectors'] else e['key']
-            self.fill(self.compare_table,[[context(r['entry']),'模式切换后读取' if r['before'] is None else r['before'],r['entry']['value'],r['error'] or r['status']] for r in data['rows']])
+            self.fill(self.compare_table,[[context(r['entry']),'模式切换后读取' if r['before'] is None else r['before'],r['entry']['value'],r['error'] or r.get('detail') or r['status']] for r in data['rows']])
             self.result_tabs.setCurrentIndex(2)
-            self.write_status.setText('校验通过 · '+data['device']['model']+' / '+data['device']['serial']+' · '+str(sum(r['status']=='修改' for r in data['rows']))+' 项修改，可写入相机并保存。' if data['ready'] else '暂不能写入：'+'；'.join(data['errors']))
+            self.write_status.setText('预检通过 · '+data['device']['model']+' / '+data['device']['serial']+' · '+str(sum(r['status']=='修改' for r in data['rows']))+' 项修改，可写入相机并保存。' if data['ready'] else '暂不能写入：'+'；'.join(data['errors']))
             self.notify('写入计划已生成，点击“写入相机并保存”执行。' if data['ready'] else '暂不能写入：'+'；'.join(data['errors']),not data['ready'])
         else:
-            self.last_report=data;self.preview=None;self.snapshot=None;self.refresh_preset_comparison();self.log.setPlainText(json.dumps(data,ensure_ascii=False,indent=2));self.result_tabs.setCurrentIndex(3)
+            self.last_report=data;self.invalidate_preview();self.snapshot=None;self.output_caps={}
+            self.refresh_output_choices();self.refresh_preset_comparison();self.log.setPlainText(json.dumps(data,ensure_ascii=False,indent=2));self.result_tabs.setCurrentIndex(3)
             self.write_status.setText('写入并读回通过；已保存UserSet1并设为默认。再次修改需重新生成计划。')
             self.device_status.setText(data['device']['model']+' · '+data['device']['serial']+' · 写入及读回完成')
             self.notify('写入及读回完成；已保存 UserSet1、重新加载核对，并设为默认用户集。')
@@ -1041,7 +1067,7 @@ class CameraPage(QWidget):
         self.write_status.setText('操作未完成：'+text)
         if not self.snapshot:self.device_status.setText('设备操作未完成，请重新读取。')
         if report:
-            self.snapshot=None;self.refresh_preset_comparison();self.last_report=report;self.log.setPlainText(json.dumps(report,ensure_ascii=False,indent=2));self.result_tabs.setCurrentIndex(3)
+            self.snapshot=None;self.output_caps={};self.refresh_output_choices();self.refresh_preset_comparison();self.last_report=report;self.log.setPlainText(json.dumps(report,ensure_ascii=False,indent=2));self.result_tabs.setCurrentIndex(3)
         self.notify(text,True)
 
     def stopped(self):
@@ -1049,6 +1075,8 @@ class CameraPage(QWidget):
         self.files_button.setEnabled(True);self.connection_button.setEnabled(True);self.language_box.setEnabled(True)
 
     def notify(self,text,error=False):
+        from diagnostic_log import event
+        if text:event('camera','message',text=text,error_event=error)
         self.message.setText(text);self.message.setVisible(bool(text));self.message.setProperty('error',error);self.message.style().unpolish(self.message);self.message.style().polish(self.message)
 
     def is_busy(self):return self.worker is not None

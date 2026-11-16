@@ -147,6 +147,7 @@ class CameraDesktopTests(unittest.TestCase):
                 p.start_write();self.assertTrue(p.is_busy());self.assertFalse(p.files_button.isEnabled());self.assertFalse(p.connection_button.isEnabled())
                 w.close();self.assertTrue(w.isVisible());self.wait(p)
             self.assertEqual(p.last_report['status'],'passed');self.assertFalse(p.write_button.isEnabled())
+            self.assertFalse(p.output_caps);self.assertEqual(p.compare_table.rowCount(),0)
             self.assertIn('UserSet1',p.message.text());self.assertTrue(p.form_panel.isEnabled())
             self.assertTrue(p.files_button.isEnabled());self.assertTrue(p.connection_button.isEnabled())
         finally:w.close();self.app.processEvents()

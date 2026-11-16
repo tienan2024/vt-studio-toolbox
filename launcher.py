@@ -383,6 +383,13 @@ def verify_package(report_path):
             if next(r for r in raw_rows if r['field']=='frame_line')['status']!='未读取':
                 raise RuntimeError('Preset comparison must remain independent of calculation')
             report['camera_read_compare_write_workflow']=True
+            from diagnostic_log import setup_logging,snapshot
+            debug_store=setup_logging();debug_path=snapshot('package-check',{'test_only':True})
+            if not debug_store or not debug_path.is_file() or 'camera' not in toolbox.diagnostic_state():
+                raise RuntimeError('Frozen global logs or state snapshots unavailable')
+            from diagnostic_ui import DiagnosticDialog
+            debug_dialog=DiagnosticDialog(toolbox);debug_dialog.refresh();debug_dialog.close()
+            report['global_diagnostics']=True
             report['camera_cycle_capacity']=True;report['camera_measured_cycle']=True
             if camera_page.controls['working_distance_mm'].isHidden() or not camera_page.controls['working_distance_mm'].isEnabled() or not camera_page.controls['framing_source'].isHidden():
                 raise RuntimeError('Frozen automatic camera input layout failed')

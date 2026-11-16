@@ -13,6 +13,7 @@ from camera_ui import CameraPage
 from engine import VERSION
 from theme import THEME
 from styled_controls import install_shared_controls
+from diagnostic_log import setup_logging,setup_qt_logging,set_state_provider,event
 
 
 def nav_icon(kind):
@@ -49,6 +50,7 @@ def nav_icon(kind):
 class ToolboxWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        setup_logging();setup_qt_logging()
         self.setWindowTitle('VT STUDIO · 图像工具箱')
         self.setMinimumSize(1180,720)
         area = QApplication.primaryScreen().availableGeometry()
@@ -94,6 +96,8 @@ class ToolboxWindow(QMainWindow):
         help_button.setIconSize(QSize(20,20))
         help_button.clicked.connect(self.help)
         side.addWidget(help_button)
+        debug_button=QPushButton('调试日志');debug_button.setIcon(nav_icon('help'));debug_button.setIconSize(QSize(20,20))
+        debug_button.clicked.connect(self.open_diagnostics);side.addWidget(debug_button)
         side.addSpacing(12)
         footer = QLabel(f'VT STUDIO  {VERSION}')
         footer.setStyleSheet('font-size: 11px; color: #b1c0d1; line-height: 1.6;')
@@ -131,6 +135,27 @@ class ToolboxWindow(QMainWindow):
         body.addWidget(self.pages,1)
         root.addWidget(content,1)
         self.select_page(0)
+        set_state_provider(self.diagnostic_state)
+
+    def open_diagnostics(self):
+        from diagnostic_ui import DiagnosticDialog
+        if not hasattr(self,'diagnostic_dialog'):self.diagnostic_dialog=DiagnosticDialog(self)
+        self.diagnostic_dialog.show();self.diagnostic_dialog.raise_();self.diagnostic_dialog.activateWindow()
+
+    def diagnostic_state(self):
+        from dataclasses import asdict
+        from camera_model import config_dict
+        def settings_of(page):
+            try:return asdict(page.settings())
+            except Exception as exc:return {'validation_error':str(exc)}
+        return {'page':self.pages.currentIndex(),
+            'camera':{'settings':config_dict(self.camera.settings(validate=False)),'fixed_values':dict(self.camera.fixed_values),
+                'selected_uid':self.camera.selected_uid(),'sdk':self.camera.sdk,'snapshot':self.camera.snapshot,
+                'comparison':self.camera.preview,'last_report':self.camera.last_report,'message':self.camera.message.text()},
+            'converter':{'busy':self.converter.is_busy(),'input_count':len(self.converter.paths),'settings':settings_of(self.converter)},
+            'defect':{'busy':self.defect.is_busy(),'ok_count':len(self.defect.ok_paths),'settings':settings_of(self.defect)},
+            'script':{'busy':self.script.is_busy(),'message':self.script.message.text(),
+                'config':{k:v for k,v in (self.script.config or {}).items() if k in ('product','use_ai','types','signals','aliases','ports')}}}
 
     def nav_button(self, text, icon, action):
         b = QPushButton(text)
@@ -141,6 +166,7 @@ class ToolboxWindow(QMainWindow):
         return b
 
     def select_page(self, index):
+        event('toolbox','page_selected',index=index)
         self.pages.setCurrentIndex(index)
         self.convert_nav.setChecked(index==0)
         self.defect_nav.setChecked(index==1)
@@ -197,4 +223,5 @@ class ToolboxWindow(QMainWindow):
                 self.camera.notify('相机操作正在执行，请等待完成后再关闭窗口。',True)
             event.ignore()
         else:
+            if hasattr(self,'diagnostic_dialog'):self.diagnostic_dialog.close()
             event.accept()

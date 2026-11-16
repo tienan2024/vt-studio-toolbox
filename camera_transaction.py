@@ -4,6 +4,7 @@ from dataclasses import replace
 import math
 from camera_model import (CameraError,calculate,settings_from_dict,node_id,fingerprint)
 from camera_sdk import open_camera,NodeUnavailable
+from diagnostic_log import event,snapshot
 
 
 class CameraWriteError(CameraError):
@@ -47,7 +48,11 @@ def selectors(camera):
 
 
 def _dependent(entry):
-    return (bool(entry['selectors']) and entry['key']!='LineMode') or entry['key'] in ('ExposureMode','ExposureAuto','GainAuto','ExposureTime','Gain','DigitalShift','BlackLevel')
+    return bool(entry['selectors']) or entry['key'] in ('ExposureMode','ExposureAuto','GainAuto','ExposureTime','Gain','DigitalShift','BlackLevel')
+
+
+def entry_label(entry):
+    return ', '.join(k+'='+str(v) for k,v in entry.get('selectors',{}).items())+' / '+entry['key'] if entry.get('selectors') else entry['key']
 
 
 def validate_value(entry,cap,geometry):
@@ -62,7 +67,9 @@ def validate_value(entry,cap,geometry):
     elif kind=='enum' and value not in cap['choices']:raise CameraError(key+'不支持枚举值 '+str(value))
     elif kind=='string' and len(value.encode('ascii'))>cap.get('max_length',0):raise CameraError(key+'超过设备名称长度。')
     elif kind=='bool' and type(value) is not bool:raise CameraError(key+'需要布尔值。')
-    if not cap['writable'] and not same(cap['value'],value):raise CameraError(key+'当前只读。')
+    if not cap['writable'] and not same(cap['value'],value):
+        raise CameraError(entry_label(entry)+'当前只读（当前 '+str(cap['value'])+'，目标 '+str(value)+'）。'+
+            ('请核对帧/行触发是否已关闭；若关闭后仍只读，请检查该线路是否固定方向或设备仍在采集。' if key=='LineMode' else ''))
 
 
 def observe_trigger_state(camera,frame_selector='FrameBurstStart',line=True):
@@ -116,14 +123,16 @@ def compare(camera,settings):
             try:
                 select.select(entry['selectors']);cap=camera.read(entry['key'],entry['kind']);row['before']=cap['value'];row['capability']=cap
                 if not cap['writable'] and not same(cap['value'],entry['value']) and _dependent(entry):
+                    if entry['key']=='LineMode':
+                        row['detail']='关闭帧/行触发后校验并修改线路模式'
                     row['status']='依赖模式切换后校验'
                 else:
                     validate_value(entry,cap,geometry);row['status']='保持' if same(cap['value'],entry['value']) else '修改'
             except NodeUnavailable as exc:
                 if entry.get('optional') and exc.access==0:row['status']='设备无此可选功能'
                 elif exc.access==1 and _dependent(entry):row['status']='依赖模式切换后校验'
-                else:row['status']='不支持';row['error']=str(exc);errors.append(str(exc))
-            except Exception as exc:row['status']='不支持';row['error']=str(exc);errors.append(str(exc))
+                else:row['status']='不支持';row['error']=entry_label(entry)+'：'+str(exc);errors.append(row['error'])
+            except Exception as exc:row['status']='不支持';row['error']=entry_label(entry)+'：'+str(exc);errors.append(row['error'])
             rows.append(row)
         persistence={}
         try:
@@ -140,16 +149,23 @@ def compare(camera,settings):
 
 
 def preview_camera(uid,settings,directory=None):
-    with open_camera(uid,directory) as camera:return compare(camera,settings)
+    with open_camera(uid,directory) as camera:result=compare(camera,settings)
+    event('camera','comparison_finished',device=result['device'],ready=result['ready'],errors=result['errors'])
+    try:snapshot('camera-comparison',result)
+    except OSError:pass
+    return result
 
 
 def inspect_camera(uid,directory=None):
     from camera_snapshot import read_snapshot
     with open_camera(uid,directory) as camera:
         geometry=camera.geometry();line='area' not in geometry.get('scan_type','').lower()
-        return {'device':camera.device,**geometry,'observed_trigger_state':observe_trigger_state(camera,line=line),
+        result={'device':camera.device,**geometry,'observed_trigger_state':observe_trigger_state(camera,line=line),
                 'snapshot':read_snapshot(camera,geometry),
                 'output_source_choices':read_output_sources(camera),'trigger_io_choices':read_trigger_ios(camera,line)}
+    try:snapshot('camera-inspect',result)
+    except OSError:pass
+    return result
 
 
 def read_output_sources(camera):
@@ -158,10 +174,15 @@ def read_output_sources(camera):
     except CameraError:return result
     with selectors(camera) as select:
         for line in lines:
+            result[line]={}
+            try:
+                select.select({'LineSelector':line});mode=camera.read('LineMode','enum')
+                result[line]['mode']={'status':'readable',**mode}
+            except CameraError as exc:result[line]['mode']={'status':'unavailable','detail':str(exc)}
             try:
                 select.select({'LineSelector':line});cap=camera.read('LineSource','enum')
-                result[line]={'status':'readable','choices':cap['choices'],'value':cap['value'],'writable':cap['writable']}
-            except CameraError as exc:result[line]={'status':'unavailable','detail':str(exc)}
+                result[line].update(status='readable',choices=cap['choices'],value=cap['value'],writable=cap['writable'])
+            except CameraError as exc:result[line].update(status='unavailable',detail=str(exc))
     return result
 
 
@@ -208,7 +229,7 @@ def apply_comparison(camera,preview,progress=None):
     if not current['ready']:raise CameraError('相机当前状态不满足写入：'+'；'.join(current['errors']))
     if fingerprint(current['plan'])!=fingerprint(preview['plan']):raise CameraError('设备范围或计算计划已变化，请重新对比。')
     def stable_values(rows):
-        return [(None if r['status']=='依赖模式切换后校验' else r['before'],r['status']) for r in rows]
+        return [(None if r['status']=='依赖模式切换后校验' and r['entry']['key']!='LineMode' else r['before'],r['status']) for r in rows]
     if stable_values(current['rows'])!=stable_values(preview['rows']):raise CameraError('相机参数在对比后已被修改，请重新对比。')
     if current['persistence']!=preview['persistence']:raise CameraError('用户集状态已变化，请重新对比。')
     if _stable_observations(current['observed_trigger_state'])!=_stable_observations(preview.get('observed_trigger_state',[])):
@@ -233,6 +254,7 @@ def apply_comparison(camera,preview,progress=None):
         def write(entry,value=None):
             select.select(entry['selectors']);cap=camera.read(entry['key'],entry['kind']);remember(entry,cap)
             desired=entry['value'] if value is None else value
+            event('camera.transaction','node_before_write',node=entry,capability=cap,desired=desired)
             candidate=dict(entry,value=desired);validate_value(candidate,cap,current['geometry'])
             ident=node_id(entry)
             if not same(cap['value'],desired):
@@ -242,16 +264,18 @@ def apply_comparison(camera,preview,progress=None):
             after=camera.read(entry['key'],cap['kind'])['value']
             if not same(after,desired):raise CameraError(entry['key']+'写入后读回不一致。')
             report['events'].append({'node':entry,'value':desired,'verified':True})
+            event('camera.transaction','node_verified',node=entry,value=after)
         def verify_all():
             for row in current['rows']:
                 if row['status']=='设备无此可选功能':continue
                 entry=row['entry'];select.select(entry['selectors'])
                 if not same(camera.read(entry['key'],entry['kind'])['value'],entry['value']):raise CameraError(entry['key']+'最终读回不一致。')
         try:
-            notify('正在关闭触发并写入运行参数…')
+            notify('正在关闭帧/行触发，解除IO锁定后写入运行参数…')
             rows=[r for r in current['rows'] if r['status']!='设备无此可选功能']
             triggers=[r['entry'] for r in rows if r['entry']['key']=='TriggerMode']
             for entry in triggers:write(entry,'Off')
+            event('camera.transaction','triggers_disabled',device=camera.device,selectors=[e['selectors'] for e in triggers])
             for key in ('OffsetX','OffsetY'):
                 row=next((r for r in rows if r['entry']['key']==key),None)
                 if row:write(row['entry'],row['capability'].get('min',0))
@@ -283,10 +307,14 @@ def apply_comparison(camera,preview,progress=None):
                     if key=='PixelFormat':return 0
                     if key in ('Width','Height'):return 10
                     if key in ('OffsetX','OffsetY'):return 20
+                    # Restore the IO bank while both trigger banks are still Off.
+                    # Exposure restoration below may require re-enabling LineStart.
+                    if key=='LineMode':return 25
+                    if row[0]['selectors'].get('LineSelector'):return 26
                     if key=='ExposureMode':return 30
                     if key=='ExposureAuto':return 31
                     if key=='ExposureTime':return 32
-                    if key in ('LineMode','DigitalShiftEnable','BlackLevelEnable'):return 80
+                    if key in ('DigitalShiftEnable','BlackLevelEnable'):return 80
                     if key in ('ExposureAuto','GainAuto'):return 90
                     if key=='TriggerMode':return 100
                     return 30
@@ -312,4 +340,11 @@ def apply_comparison(camera,preview,progress=None):
 
 
 def write_camera(preview,directory=None,progress=None):
-    with open_camera(preview['device']['uid'],directory,write=True) as camera:return apply_comparison(camera,preview,progress)
+    try:
+        with open_camera(preview['device']['uid'],directory,write=True) as camera:result=apply_comparison(camera,preview,progress)
+        try:snapshot('camera-write-passed',result)
+        except OSError:pass
+        return result
+    except Exception as exc:
+        event('camera','write_failed',error=str(exc),report=getattr(exc,'report',None),error_event=True)
+        raise

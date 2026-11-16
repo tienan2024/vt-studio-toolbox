@@ -15,8 +15,10 @@ class SolApplyJob(QThread):
     def __init__(self,request,parent=None):super().__init__(parent);self.request=request
 
     def run(self):
+        from diagnostic_log import event,exception
+        event('sol','apply_started')
         try:self.result.emit('apply',apply_script(**self.request,progress=self.progress.emit))
-        except Exception as exc:self.failed.emit(str(exc))
+        except Exception as exc:exception('sol','apply_failed',exc);self.failed.emit(str(exc))
         finally:self.request['password']=None
 
 

@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import sys
 import threading
+from functools import wraps
+from diagnostic_log import event
 
 from camera_model import CameraError
 
@@ -16,6 +18,29 @@ _runtime_handles=[]
 class NodeUnavailable(CameraError):
     def __init__(self,key,access):
         super().__init__('节点当前不可读或未实现：'+key);self.access=access
+
+
+def trace_node(method):
+    @wraps(method)
+    def traced(self,key,*args):
+        context=dict(getattr(self,'_trace_selectors',{}))
+        try:
+            result=method(self,key,*args)
+            if method.__name__=='read':
+                if key.endswith('Selector'):
+                    if not hasattr(self,'_trace_selectors'):self._trace_selectors={}
+                    self._trace_selectors[key]=result['value']
+                event('camera.sdk','read',device=self.device,key=key,selectors=context,capability=result)
+            else:
+                if key.endswith('Selector') and args:
+                    if not hasattr(self,'_trace_selectors'):self._trace_selectors={}
+                    self._trace_selectors[key]=args[-1]
+                event('camera.sdk',method.__name__,device=self.device,key=key,selectors=context,args=args)
+            return result
+        except Exception as exc:
+            event('camera.sdk',method.__name__+'_failed',device=self.device,key=key,selectors=context,args=args,error=str(exc))
+            raise
+    return traced
 
 
 def discover_mvs(directory=None):
@@ -108,12 +133,14 @@ def _devices(sdk,p):
 
 def enumerate_cameras(directory=None):
     with runtime(directory) as (sdk,p):
-        return {'sdk_version':hex(sdk.MvCamera.MV_CC_GetSDKVersion()),'devices':[d for d,info in _devices(sdk,p)]}
+        result={'sdk_version':hex(sdk.MvCamera.MV_CC_GetSDKVersion()),'devices':[d for d,info in _devices(sdk,p)]}
+        event('camera.sdk','enumerated',**result);return result
 
 
 class Camera:
     def __init__(self,handle,sdk,params,device):self.handle=handle;self.sdk=sdk;self.p=params;self.device=device
 
+    @trace_node
     def read(self,key,kind):
         access=ctypes.c_int();_check(self.handle.MV_XML_GetNodeAccessMode(key,access),'读取'+key+'访问权限')
         if access.value not in (self.p.AM_RO,self.p.AM_RW):raise NodeUnavailable(key,access.value)
@@ -145,6 +172,7 @@ class Camera:
             result.update(value=symbol(value.nCurValue),choices=[symbol(n) for n in value.nSupportValue[:value.nSupportedNum]])
         return result
 
+    @trace_node
     def write(self,key,kind,value):
         if kind=='int':code=self.handle.MV_CC_SetIntValueEx(key,int(value))
         elif kind=='float':code=self.handle.MV_CC_SetFloatValue(key,float(value))
@@ -154,6 +182,7 @@ class Camera:
         else:raise CameraError('不能写入的节点类型：'+kind)
         _check(code,'设置'+key)
 
+    @trace_node
     def command(self,key):_check(self.handle.MV_CC_SetCommandValue(key),'执行'+key)
 
     def command_ready(self,key):
@@ -183,6 +212,7 @@ class Camera:
 
 @contextmanager
 def open_camera(uid,directory=None,write=False):
+    event('camera.sdk','open_requested',uid=uid,write=write,directory=directory)
     with runtime(directory) as (sdk,p):
         matches=[(d,info) for d,info in _devices(sdk,p) if d['uid']==uid]
         if len(matches)!=1:raise CameraError('目标相机不在当前设备列表或序列号不唯一，请重新枚举。')
@@ -191,7 +221,9 @@ def open_camera(uid,directory=None,write=False):
         try:
             # Never use access modes that steal another application's control.
             _check(handle.MV_CC_OpenDevice(1 if write else 3,0),'打开相机（请确认未被其他软件占用）');opened=True
+            event('camera.sdk','opened',device=device,write=write)
             yield Camera(handle,sdk,p,device)
         finally:
             if opened:handle.MV_CC_CloseDevice()
             handle.MV_CC_DestroyHandle()
+            event('camera.sdk','closed',uid=uid)

@@ -52,11 +52,13 @@ class ScriptJob(QThread):
         super().__init__(parent);self.action=action;self.config=config;self.case=case;self.previous=previous
 
     def run(self):
+        from diagnostic_log import event,exception
+        event('script','test_started',action=self.action)
         try:
             result=(run_cases(self.config,[self.case],self.previous) if self.action=='frame'
                     else run_regression(self.config,self.previous))
             self.result.emit(self.action,result)
-        except Exception as exc:self.failed.emit(str(exc))
+        except Exception as exc:exception('script','test_failed',exc,action=self.action);self.failed.emit(str(exc))
 
 
 class ScriptPage(QWidget):
@@ -319,6 +321,8 @@ class ScriptPage(QWidget):
         if table.currentRow()>=0:table.removeRow(table.currentRow());self.changed()
 
     def notify(self,text,error=False):
+        from diagnostic_log import event
+        if text:event('script','message',text=text,error_event=error)
         self.message.setText(text);self.message.setProperty('error',error)
         self.message.style().unpolish(self.message);self.message.style().polish(self.message)
 

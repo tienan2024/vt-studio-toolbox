@@ -437,9 +437,13 @@ class Worker(QThread):
         self.operation = operation
 
     def run(self):
+        from diagnostic_log import event,exception
+        component=getattr(self.operation,'__module__','image.worker');event(component,'task_started')
         try:
             self.result.emit(self.operation(self))
+            event(component,'task_finished')
         except Exception as exc:
+            exception(component,'task_failed',exc)
             self.failed.emit(exc)
 
 
@@ -886,6 +890,8 @@ class MainWindow(QMainWindow):
         return widget
 
     def notify(self, text, error=False):
+        from diagnostic_log import event
+        if text:event('defect','message',text=text,error_event=error)
         self.message.setText(text)
         self.message.setProperty("error", error)
         self.message.style().unpolish(self.message)
@@ -1629,6 +1635,8 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    from diagnostic_log import setup_logging
+    setup_logging()
     parser = argparse.ArgumentParser(description="VT STUDIO 图像工具箱")
     parser.add_argument("--ng", nargs='+', help="启动时批量导入 NG 图，不自动圈选")
     parser.add_argument("--ok", nargs="*", help="启动时导入 OK 底图")

@@ -194,6 +194,8 @@ class ConverterPage(QWidget):
         return self.worker is not None
 
     def notify(self, text, error=False):
+        from diagnostic_log import event
+        if text:event('converter','message',text=text,error_event=error)
         self.message.setText(text)
         self.message.setProperty('error', error)
         self.message.style().unpolish(self.message)
@@ -378,6 +380,8 @@ class ConverterPage(QWidget):
             self.progress_text.setText(message)
         else:
             self.log.appendPlainText(message)
+            from diagnostic_log import event
+            event('converter','core_message',text=message)
 
     def on_done(self, result):
         self.last_run = result.get('run_dir')

@@ -407,6 +407,8 @@ def execute(args, cancel):
 
 
 def main(argv=None):
+    from diagnostic_log import setup_logging,event
+    setup_logging()
     for stream in (sys.stdout,sys.stderr):
         if stream is not None and hasattr(stream,'reconfigure'):
             stream.reconfigure(encoding='utf-8')
@@ -415,6 +417,7 @@ def main(argv=None):
     old_handler = signal.getsignal(signal.SIGINT)
     try:
         args = parser().parse_args(argv)
+        event('cli','command_started',command=args.command)
         if sys.stdout is None and not args.json_out:
             return 2  # GUI entry requires --json-out; use VTStudioCLI.exe for stdout.
         if args.json_out and Path(args.json_out).exists():
@@ -425,6 +428,7 @@ def main(argv=None):
     except SystemExit as exc:
         return int(exc.code or 0)
     except Exception as exc:
+        event('cli','command_failed',command=getattr(args,'command',None),error=str(exc),error_event=True)
         code = 2 if isinstance(exc,CLIUsageError) else 1
         envelope = {'schema':CLI_SCHEMA,'ok':False,'command':getattr(args,'command',None),
                     'exit_code':code,'error':str(exc),'error_type':type(exc).__name__}
@@ -443,6 +447,7 @@ def main(argv=None):
                           'error':f'结果已处理，但 JSON 报告保存失败：{exc}','data':envelope.get('data')}
     if sys.stdout is not None:
         print(json.dumps(envelope,ensure_ascii=False),flush=True)
+    event('cli','command_finished',command=getattr(args,'command',None),exit_code=code)
     return code
 
 
