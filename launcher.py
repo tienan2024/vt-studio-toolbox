@@ -393,6 +393,10 @@ def verify_package(report_path):
             if model not in camera_page.page_preset_controls['imaging'][0].currentText() or image_preset.get('gain')!=0 or image_preset.get('width_override')!=0:
                 raise RuntimeError('CL024 presets must be named and isolated from CL042 MFS values')
             report['camera_model_presets']=True
+            camera_page.fit_metrics();cell=camera_page.io_table.cellWidget(0,0)
+            if camera_page.io_table.rowHeight(0)<cell.minimumSizeHint().height()+2:
+                raise RuntimeError('Digital IO preset controls are clipped by the property row')
+            report['camera_io_preset_layout']=True
             camera_page.finished_result('scan',{'sdk_version':'package-check','devices':[]})
             camera_page.preset_store=original_model_store
             camera_page.load_settings(original_camera_settings)

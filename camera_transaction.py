@@ -268,11 +268,31 @@ def apply_comparison(camera,preview,progress=None):
             if not same(after,desired):raise CameraError(entry['key']+'写入后读回不一致。')
             report['events'].append({'node':entry,'value':desired,'verified':True})
             event('camera.transaction','node_verified',node=entry,value=after)
-        def verify_all():
+        def verify_all(phase):
+            reading={'phase':phase,'cache_invalidated':False,'verified':False,'rows':[]}
+            report.setdefault('readbacks',[]).append(reading)
+            refresh=getattr(camera,'invalidate_nodes',None)
+            try:
+                if callable(refresh):reading['cache_invalidated']=bool(refresh())
+            except Exception as exc:
+                reading['error']=str(exc)
+                raise CameraError(('保存前' if phase=='before_save' else '重载UserSet1后')+'节点缓存刷新失败：'+str(exc)) from exc
+            errors=[]
             for row in current['rows']:
                 if row['status']=='设备无此可选功能':continue
-                entry=row['entry'];select.select(entry['selectors'])
-                if not same(camera.read(entry['key'],entry['kind'])['value'],entry['value']):raise CameraError(entry['key']+'最终读回不一致。')
+                entry=row['entry'];result={'node':entry,'expected':entry['value'],'actual':None,'verified':False}
+                reading['rows'].append(result)
+                try:
+                    select.select(entry['selectors']);cap=camera.read(entry['key'],entry['kind'])
+                    result.update(actual=cap['value'],verified=same(cap['value'],entry['value']))
+                    if not result['verified']:errors.append(entry_label(entry)+'：目标 '+str(entry['value'])+'，实际 '+str(cap['value']))
+                except Exception as exc:
+                    result['error']=str(exc);errors.append(entry_label(entry)+'：读取失败 '+str(exc))
+                event('camera.transaction','final_readback',phase=phase,**result)
+            reading['verified']=not errors
+            if errors:
+                label='保存前' if phase=='before_save' else '重载UserSet1后'
+                raise CameraError(label+'最终读回不一致：'+'；'.join(errors[:3])+('；另有'+str(len(errors)-3)+'项' if len(errors)>3 else '')+'。')
         try:
             notify('正在关闭帧/行触发，解除IO锁定后写入运行参数…')
             rows=[r for r in current['rows'] if r['status']!='设备无此可选功能']
@@ -283,10 +303,10 @@ def apply_comparison(camera,preview,progress=None):
                 row=next((r for r in rows if r['entry']['key']==key),None)
                 if row:write(row['entry'],row['capability'].get('min',0))
             for row in _ordered(rows):write(row['entry'])
-            verify_all();report['observed_before_save']=_verify_capacity(camera,settings);select.restore();select.original.clear()
+            verify_all('before_save');report['observed_before_save']=_verify_capacity(camera,settings);select.restore();select.original.clear()
             notify('运行参数已读回，正在保存 UserSet1…')
             camera.write('UserSetSelector','enum','UserSet1');persist_started=True;report['persistent_may_have_changed']=True
-            camera.command('UserSetSave');camera.command('UserSetLoad');verify_all();report['observed_after_reload']=_verify_capacity(camera,settings)
+            camera.command('UserSetSave');camera.command('UserSetLoad');verify_all('after_reload');report['observed_after_reload']=_verify_capacity(camera,settings)
             select.restore();select.original.clear()
             camera.write('UserSetDefault','enum','UserSet1')
             if camera.read('UserSetDefault','enum')['value']!='UserSet1':raise CameraError('默认用户集读回不一致。')

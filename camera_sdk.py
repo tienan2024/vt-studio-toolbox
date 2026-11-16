@@ -185,6 +185,14 @@ class Camera:
     @trace_node
     def command(self,key):_check(self.handle.MV_CC_SetCommandValue(key),'执行'+key)
 
+    def invalidate_nodes(self):
+        """Read hardware after a bulk parameter reload, rather than trusting node cache."""
+        method=getattr(self.handle,'MV_CC_InvalidateNodes',None)
+        if not callable(method):
+            event('camera.sdk','node_cache_refresh_unavailable',device=self.device);return False
+        _check(method(),'刷新GenICam节点缓存');self._trace_selectors={}
+        event('camera.sdk','node_cache_invalidated',device=self.device);return True
+
     def command_ready(self,key):
         access=ctypes.c_int();_check(self.handle.MV_XML_GetNodeAccessMode(key,access),'读取'+key+'访问权限')
         if access.value not in (self.p.AM_WO,self.p.AM_RW):raise CameraError('命令不可执行：'+key)

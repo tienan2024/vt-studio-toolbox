@@ -73,7 +73,7 @@ class FramePreview(QWidget):
 class PropertyForm:
     """MVS-style parameter/value/unit grid, retaining real typed Qt editors."""
     def __init__(self,page,title):
-        self.table=page.table(['参数','设置值','单位']);self.rows={}
+        self.table=page.table(['参数','设置值','单位']);self.rows={};self.spanned_rows={}
         self.table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Fixed);self.table.setColumnWidth(0,126)
         self.table.horizontalHeader().setSectionResizeMode(2,QHeaderView.ResizeMode.Fixed);self.table.setColumnWidth(2,70)
         widget=QWidget();layout=QVBoxLayout(widget);layout.setContentsMargins(8,10,8,10);layout.addWidget(self.table);layout.addStretch()
@@ -86,7 +86,7 @@ class PropertyForm:
             if isinstance(caption,QCheckBox):
                 widget=caption;caption=QLabel(widget.text());widget.setText('')
             else:
-                self.table.setSpan(row,0,1,3);self.table.setCellWidget(row,0,caption);self.table.setRowHeight(row,54);self.fit();return
+                self.table.setSpan(row,0,1,3);self.table.setCellWidget(row,0,caption);self.spanned_rows[row]=caption;self.fit();return
         text=caption.text();name,_,unit=text.partition(' / ');caption.setText(name)
         self.table.setCellWidget(row,0,caption);self.table.setCellWidget(row,1,widget)
         self.table.setItem(row,2,QTableWidgetItem(unit));self.rows[widget]=row;self.fit()
@@ -99,6 +99,11 @@ class PropertyForm:
         return self.table.isRowHidden(self.rows[widget])
 
     def fit(self):
+        for row,widget in self.spanned_rows.items():
+            widget.ensurePolished()
+            if widget.layout():widget.layout().activate()
+            # QSS item padding and the grid consume space outside the cell widget.
+            self.table.setRowHeight(row,max(54,widget.minimumSizeHint().height(),widget.sizeHint().height())+10)
         self.table.setFixedHeight(max(30,self.table.horizontalHeader().sizeHint().height())+sum(self.table.rowHeight(i) for i in range(self.table.rowCount()) if not self.table.isRowHidden(i))+4)
 
 
@@ -889,6 +894,7 @@ class CameraPage(QWidget):
 
     def fit_input_panel(self):
         self._input_fit_pending=False
+        for form in self.property_forms:form.fit()
         content=self.form_tabs.currentWidget().widget()
         if content is None:return
         content.layout().activate()
