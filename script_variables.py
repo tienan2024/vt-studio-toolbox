@@ -122,6 +122,7 @@ class VariablesPanel(QWidget):
         self.module.blockSignals(False);self.show_source()
 
     def set_metadata(self,data):
+        self.path=data['path']
         self.path_display.setText(data['path']);self.path_display.setToolTip(data['path'])
         self.metadata=data;self.flow.blockSignals(True);self.flow.clear();seen=set()
         for script in data['scripts']:

@@ -30,7 +30,7 @@ class SolApplicationTests(unittest.TestCase):
         self.assertEqual(len(plan_application(c,target)['preserved']),11)
 
     def test_unknown_input_renamed_output_and_type_conflict_cannot_break_bindings(self):
-        c=default_config();target=module();target['inputs']=target['inputs'][1:]
+        c=default_config();target=module();target['inputs']=[r for r in target['inputs'] if r['name']=='aiResult']
         with self.assertRaisesRegex(SolApplyError,'必需输入'):plan_application(c,target)
         c['ports']={'NG_name':'改名输出'}
         with self.assertRaisesRegex(SolApplyError,'下游绑定'):plan_application(c,module())

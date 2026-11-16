@@ -29,8 +29,24 @@ def sdk_apps(directory):
     return path
 
 
+def vm_preference_path():
+    return Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'VTStudioToolbox'/'vm-install.json'
+
+
+def remember_vm(directory):
+    apps=sdk_apps(directory);path=vm_preference_path();path.parent.mkdir(parents=True,exist_ok=True)
+    with tempfile.NamedTemporaryFile('w',encoding='utf-8',dir=path.parent,delete=False,suffix='.tmp') as f:
+        temporary=Path(f.name);json.dump({'applications':str(apps)},f)
+    try:os.replace(temporary,path)
+    finally:temporary.unlink(missing_ok=True)
+
+
 def discover_vm():
-    candidates=[os.environ.get('VT_VM_APPLICATIONS',''),'D:/VM/VisionMaster4.4.0/Applications']
+    candidates=[os.environ.get('VT_VM_APPLICATIONS','')]
+    try:
+        path=vm_preference_path()
+        if path.stat().st_size<4096:candidates.append(json.loads(path.read_text(encoding='utf-8'))['applications'])
+    except (OSError,ValueError,KeyError,TypeError):pass
     if os.name=='nt':
         import winreg
         for base in (r'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',r'SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'):
@@ -47,6 +63,24 @@ def discover_vm():
         if not candidate:continue
         try:return str(sdk_apps(candidate))
         except SolApplyError:pass
+    # Bounded breadth-first search: cover C/D install roots without walking image datasets.
+    roots=[Path(d)/p for d in ('C:/','D:/') for p in ('Program Files','Program Files (x86)','HIKROBOT','VM','VisionMaster')]
+    roots.extend(Path(d) for d in ('C:/','D:/'))
+    visited=set();queue=[(p,0) for p in roots];examined=0
+    while queue and examined<3000:
+        path,depth=queue.pop(0)
+        if str(path).lower() in visited:continue
+        visited.add(str(path).lower());examined+=1
+        try:
+            if path.is_symlink() or (hasattr(path,'is_junction') and path.is_junction()):continue
+            if path.name.lower()=='applications':
+                try:return str(sdk_apps(path))
+                except SolApplyError:continue
+            if depth>=4:continue
+            for child in sorted(path.iterdir(),key=lambda p:p.name.lower()):
+                if child.is_dir() and child.name.lower() not in ('windows','users','programdata','$recycle.bin','system volume information','node_modules','.git'):
+                    queue.append((child,depth+1))
+        except OSError:continue
     return ''
 
 
@@ -59,9 +93,17 @@ def check_vm_closed():
         raise SolApplyError('请先保存并关闭 VisionMaster，再自动应用；SDK需要独占脚本编译环境。')
 
 
+def config_for_module(config,module):
+    c=validate_config(config)
+    names={r['name'] for r in module['inputs']}
+    if any(port_name(c,n) not in names for n in ('aiResult','Label_name')):
+        c=dict(c,use_ai=False)
+    return c
+
+
 def plan_application(config,module):
-    c=validate_config(config);rows=variable_rows(c)
     if not module or not str(module.get('id','')).isdigit():raise SolApplyError('请先选择 SOL 中的脚本模块。')
+    c=config_for_module(config,module);rows=variable_rows(c)
     additions=[];preserved=[]
     optional={port_name(c,n) for n in ('aiResult','Label_name')} if not c['use_ai'] else set()
     for key,direction in (('inputs','输入'),('outputs','输出')):
@@ -79,7 +121,7 @@ def plan_application(config,module):
                 additions.append({'direction':direction,'name':name,'type':row['type']})
     return {'module_id':module['id'],'flow':module['flow'],'module':module['name'],
             'preserved':preserved,'added':additions,'inputs':[r for r in rows if r['direction']=='输入'],
-            'outputs':[r for r in rows if r['direction']=='输出']}
+            'outputs':[r for r in rows if r['direction']=='输出'],'ai_enabled':c['use_ai']}
 
 
 def _hash(path):
@@ -187,6 +229,8 @@ def _apply_script(path,module_id,config,output,password=None,applications=None,p
     if output.suffix.lower()!='.sol' or not output.parent.is_dir():raise SolApplyError('输出必须是已有文件夹内的新 .sol 文件。')
     before_hash=_hash(path);original=read_sol_parts(path,password);metadata=sol_metadata(path,*original)
     module=next((m for m in metadata['scripts'] if m['id']==str(module_id)),None)
+    if module is None:raise SolApplyError('目标脚本模块不存在。')
+    c=config_for_module(c,module)
     plan=plan_application(c,module);source=generate_sources(c,previous)['UserScript.cs']
     notify=progress or (lambda message:None)
     required_space=max(256*1024*1024,path.stat().st_size*5+128*1024*1024)
@@ -238,4 +282,4 @@ def _apply_script(path,module_id,config,output,password=None,applications=None,p
         finally:request['password']=None;password=None
     return {'output':str(output),'module_id':str(module_id),'flow':module['flow'],'module':module['name'],
             'compile':native['compile'],'reloaded':True,'source_unchanged':True,'flows_run':False,
-            'added_ports':plan['added'],**verification}
+            'added_ports':plan['added'],'metadata':final_meta,**verification}

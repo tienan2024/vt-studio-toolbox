@@ -12,16 +12,19 @@ _secret_text=re.compile(r'((?:password|passwd|secret|token|api[_-]?key|authoriza
 _quoted_secret=re.compile(r'((?:password|passwd|secret|token|api[_-]?key|authorization|密码|口令)[\"\x27]?\s*[:=]\s*)([\"\x27])(.*?)\2',re.I|re.S)
 
 
+def redact_text(value):
+    value=_quoted_secret.sub(r'\1\2<redacted>\2',value)
+    value=_secret_text.sub(r'\1<redacted>',value)
+    value=re.sub(r'(?i)\bBearer\s+\S+','Bearer <redacted>',value)
+    return re.sub(r'-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----','<redacted private key>',value,flags=re.S)
+
+
 def redact(value,depth=0):
     if depth>18:return '<depth limit>'
     if isinstance(value,dict):return {str(k):'<redacted>' if _secret_key.search(str(k)) else redact(v,depth+1) for k,v in value.items()}
     if isinstance(value,(list,tuple)):return [redact(v,depth+1) for v in value[:5000]]
     if isinstance(value,str):
-        value=_quoted_secret.sub(r'\1\2<redacted>\2',value)
-        value=_secret_text.sub(r'\1<redacted>',value)
-        value=re.sub(r'(?i)\bBearer\s+\S+','Bearer <redacted>',value)
-        value=re.sub(r'-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----','<redacted private key>',value,flags=re.S)
-        return value[:48000]
+        return redact_text(value)[:48000]
     if value is None or isinstance(value,(bool,int,float)):return value
     return redact(str(value),depth+1)
 
@@ -94,7 +97,12 @@ class DiagnosticStore:
             archive.writestr('manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
             for source in selected:
                 # Reapply redaction when exporting text, including files from previous sessions.
-                data=source.read_bytes() if source.suffix=='.png' else redact(source.read_text(encoding='utf-8',errors='replace')).encode('utf-8')
+                if source.suffix=='.png':data=source.read_bytes()
+                elif source.suffix=='.json':
+                    raw=source.read_text(encoding='utf-8',errors='replace')
+                    try:data=json.dumps(redact(json.loads(raw)),ensure_ascii=False,indent=2).encode('utf-8')
+                    except ValueError:data=redact_text(raw).encode('utf-8')
+                else:data=redact_text(source.read_text(encoding='utf-8',errors='replace')).encode('utf-8')
                 archive.writestr(source.name,data)
         return Path(path)
 

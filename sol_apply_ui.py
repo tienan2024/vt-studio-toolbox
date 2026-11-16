@@ -1,9 +1,10 @@
 """A concrete preview of the target and port changes before SDK application."""
 from pathlib import Path
+import re
 from PySide6.QtCore import QThread,Signal,Qt
 from PySide6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,
     QLineEdit,QPushButton,QDialogButtonBox,QFileDialog,QPlainTextEdit)
-from sol_apply import apply_script,plan_application,discover_vm,sdk_apps,SolApplyError
+from sol_apply import apply_script,plan_application,discover_vm,sdk_apps,remember_vm,SolApplyError
 
 
 class SolApplyJob(QThread):
@@ -33,14 +34,16 @@ class SolApplyDialog(QDialog):
         info.setWordWrap(True);root.addWidget(info)
         form=QFormLayout();self.sdk=QLineEdit(discover_vm());sdk_row=QHBoxLayout();sdk_row.addWidget(self.sdk,1)
         browse=QPushButton('选择目录');browse.clicked.connect(self.browse_sdk);sdk_row.addWidget(browse);form.addRow('VisionMaster',sdk_row)
-        output=self.path.with_name(self.path.stem+'_脚本已应用.sol');index=2
-        while output.exists():output=self.path.with_name(self.path.stem+'_脚本已应用_'+str(index)+'.sol');index+=1
+        stem=re.sub(r'_脚本已应用(?:_\d+)?$','',self.path.stem)
+        output=self.path.with_name(stem+'_脚本已应用.sol');index=2
+        while output.exists():output=self.path.with_name(stem+'_脚本已应用_'+str(index)+'.sol');index+=1
         self.output=QLineEdit(str(output));out_row=QHBoxLayout();out_row.addWidget(self.output,1)
         choose=QPushButton('另存位置');choose.clicked.connect(self.browse_output);out_row.addWidget(choose);form.addRow('新方案',out_row)
         self.password=QLineEdit();self.password.setEchoMode(QLineEdit.EchoMode.Password)
         self.password.setPlaceholderText('受保护方案填写密码，仅用于本次应用');form.addRow('方案密码',self.password);root.addLayout(form)
         summary=QPlainTextEdit();summary.setReadOnly(True)
         lines=['沿用已有变量与原绑定：'+str(len(self.plan['preserved']))+' 项']
+        lines+=['AI 判定：'+('启用' if self.plan['ai_enabled'] else '关闭（兼容AI输入不参与判定）')]
         lines+=['  '+r['direction']+'  '+r['name']+' ('+r['type']+')' for r in self.plan['preserved']]
         lines+=['新增变量：'+str(len(self.plan['added']))+' 项（原变量不删除、不重命名）']
         lines+=['  '+r['direction']+'  '+r['name']+' ('+r['type']+')' for r in self.plan['added']]
@@ -65,5 +68,6 @@ class SolApplyDialog(QDialog):
             sdk_apps(self.sdk.text());output=Path(self.output.text()).resolve()
             if output==self.path.resolve() or output.exists():raise SolApplyError('请选择新文件名；原方案和已有文件不能覆盖。')
             if output.suffix.lower()!='.sol' or not output.parent.is_dir():raise SolApplyError('请选择有效的新 .sol 路径。')
+            remember_vm(self.sdk.text())
             self.accept()
         except Exception as exc:self.error.setText(str(exc))

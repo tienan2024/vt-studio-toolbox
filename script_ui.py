@@ -249,7 +249,7 @@ class ScriptPage(QWidget):
         if not module:raise ScriptError('请先选择脚本模块。')
         inputs={r['name']:r for r in module['inputs']};outputs={r['name']:r for r in module['outputs']}
         for name,kind in FIXED_INPUTS:
-            if name=='aiResult' and name not in inputs:continue
+            if name in ('aiResult','Label_name') and name not in inputs:continue
             if name not in inputs or inputs[name]['type']!=kind:raise ScriptError('此模块无法直接套用 NG 模板：缺少标准输入 '+name+' 或类型不同。可继续查看原始清单。')
         if set(outputs)!=set(dict(OUTPUTS)) or any(outputs[n]['type']!=t for n,t in OUTPUTS):raise ScriptError('此模块输出不符合 NG 模板的四项标准输出；原始变量仍可查看。')
         signals=[r for r in module['inputs'] if r['name'] not in dict(FIXED_INPUTS)]
@@ -281,11 +281,11 @@ class ScriptPage(QWidget):
     def apply_sol_module(self,module,mappings):
         signals=self.sol_signals(module);c=self.read_config()
         c['signals']=[{'name':r['name'],'type':mappings.get(r['name'],'')} for r in signals]
-        missing=not any(r['name']=='aiResult' for r in module['inputs'])
+        missing=not {'aiResult','Label_name'}.issubset({r['name'] for r in module['inputs']})
         if missing:c['use_ai']=False
         c.pop('ports',None);c.pop('variable_notes',None);self.load_config(c)
         self.variables.source.setCurrentIndex(0)
-        self.notify('已应用 '+module['flow']+' / '+module['name']+' 的变量，使用当前 NG 模板生成逻辑。'+('已补充 aiResult 兼容输入并关闭 AI 判定。' if missing else '请确认本产品 AI 规则。'))
+        self.notify('已应用 '+module['flow']+' / '+module['name']+' 的变量，使用当前 NG 模板生成逻辑。'+('已补齐 aiResult、Label_name 兼容输入并关闭 AI 判定。' if missing else '请确认本产品 AI 规则。'))
 
     def review_sol_application(self,module):
         if self.is_busy():return
@@ -294,6 +294,10 @@ class ScriptPage(QWidget):
         c=self.refresh()
         if c is None:return
         try:
+            from sol_apply import config_for_module
+            c=config_for_module(c,module)
+            if self.use_ai.isChecked()!=c['use_ai']:
+                self.use_ai.setChecked(c['use_ai']);self.refresh()
             dialog=SolApplyDialog(self.variables.metadata['path'],module,c,self)
             if not dialog.exec():return
             request={'path':self.variables.metadata['path'],'module_id':module['id'],'config':c,
@@ -432,8 +436,13 @@ class ScriptPage(QWidget):
 
     def test_finished(self,action,data):
         if action=='apply':
-            self.variables.status.setText('应用完成：'+data['output'])
-            self.notify('VM 编译、另存和独立重载校验完成：'+data['output']+'。检测流程未运行。')
+            if data.get('metadata'):
+                self.variables.set_metadata(data['metadata'])
+                target=next(m for m in data['metadata']['scripts'] if m['id']==str(data['module_id']))
+                self.variables.flow.setCurrentIndex(self.variables.flow.findData(target['flow_id']))
+                self.variables.module.setCurrentIndex(self.variables.module.findData(target['id']))
+            self.variables.status.setText('已保存并继续编辑：'+data['output'])
+            self.notify('已继续使用新方案：'+data['output']+'。可切换流程修改下一脚本，之前已应用的修改会保留。检测流程未运行。')
             return
         if action=='frame':
             row=data['results'][0];outputs=row['outputs']
