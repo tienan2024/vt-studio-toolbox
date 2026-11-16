@@ -22,6 +22,8 @@ secrets/
 *.sol
 *.mfs
 *.pfs
+*.mfa
+camera-backups/
 local-settings*.json
 diagnostics/
 debug-bundles/

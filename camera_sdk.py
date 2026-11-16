@@ -193,6 +193,21 @@ class Camera:
         _check(method(),'刷新GenICam节点缓存');self._trace_selectors={}
         event('camera.sdk','node_cache_invalidated',device=self.device);return True
 
+    def device_file(self,name,data=None):
+        """Vendor FileAccess buffer API; never reinterpret the device file bytes."""
+        limit=16*1024*1024;writing=data is not None
+        method=getattr(self.handle,'MV_CC_FileAccessWriteEx' if writing else 'MV_CC_FileAccessReadEx',None)
+        structure=getattr(self.p,'MV_CC_FILE_ACCESS_EX',None)
+        if not callable(method) or structure is None:raise CameraError('当前MVS封装缺少FileAccessEx，请升级SDK或使用MVS文件存取导入。')
+        if writing and not 0<len(data)<=limit:raise CameraError('设备文件大小无效。')
+        buffer=ctypes.create_string_buffer(data,len(data)) if writing else ctypes.create_string_buffer(limit)
+        request=structure();request.pUserFileBuf=ctypes.cast(buffer,ctypes.POINTER(ctypes.c_char))
+        request.pFileBufSize=len(buffer);request.pFileBufLen=len(data) if writing else 0;request.pDevFileName=name.encode('ascii')
+        _check(method(request),'写入设备文件' if writing else '读取设备文件')
+        if not writing and not 0<request.pFileBufLen<=len(buffer):raise CameraError('SDK返回的设备文件长度无效。')
+        event('camera.sdk','device_file_written' if writing else 'device_file_read',device=self.device,device_file=name,bytes=len(data) if writing else request.pFileBufLen)
+        return None if writing else buffer.raw[:request.pFileBufLen]
+
     def command_ready(self,key):
         access=ctypes.c_int();_check(self.handle.MV_XML_GetNodeAccessMode(key,access),'读取'+key+'访问权限')
         if access.value not in (self.p.AM_WO,self.p.AM_RW):raise CameraError('命令不可执行：'+key)

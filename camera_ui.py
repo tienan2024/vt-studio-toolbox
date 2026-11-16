@@ -7,7 +7,7 @@ from PySide6.QtGui import QPainter,QColor,QPen,QPixmap,QIcon,QPainterPath
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,
     QPushButton,QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QCheckBox,QTabWidget,
     QSplitter,QScrollArea,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,
-    QPlainTextEdit,QFileDialog,QProgressBar,QMenu,QGridLayout,QSizePolicy,QToolButton,QAbstractSpinBox,QLayout,QFrame)
+    QPlainTextEdit,QFileDialog,QProgressBar,QMenu,QGridLayout,QSizePolicy,QToolButton,QAbstractSpinBox,QLayout,QFrame,QMessageBox)
 from styled_controls import make_combo,style_control
 from camera_model import CameraSettings,CameraError,calculate,config_dict,settings_from_dict,import_mfs_text,fingerprint,workflow_settings
 from camera_sdk import discover_mvs,enumerate_cameras
@@ -42,6 +42,9 @@ class CameraJob(QThread):
             if self.action=='scan':data=enumerate_cameras(self.sdk)
             elif self.action=='inspect':data=inspect_camera(self.payload['uid'],self.sdk)
             elif self.action=='compare':data=preview_camera(self.payload['uid'],settings_from_dict(self.payload['settings']),self.sdk)
+            elif self.action=='mfa':
+                from camera_mfa import import_mfa
+                data=import_mfa(self.payload['uid'],self.payload['path'],self.payload['sha256'],self.sdk,self.progress.emit)
             else:data=write_camera(self.payload,self.sdk,self.progress.emit)
             self.result.emit(self.action,data)
         except Exception as exc:
@@ -197,6 +200,7 @@ class CameraPage(QWidget):
         self.connection_button=self.button('设备连接',lambda:None,tools);self.connection_button.setCheckable(True)
         self.files_button=self.button('配置与文件',lambda:None,tools);menu=QMenu(self.files_button)
         for title,action in [('打开配置',self.open_config),('保存配置',self.save_config),('读取 MFS',self.open_mfs),('设置 MVS 目录',self.choose_sdk)]:menu.addAction(title,action)
+        menu.addAction('导入 MFA 到设备用户集1…',self.open_mfa)
         self.files_button.setMenu(menu);root.addLayout(tools)
         for widget in (self.language_box,self.connection_button,self.files_button):widget.setFixedSize(152,36)
         self.devices_bar=QWidget();bar=QHBoxLayout(self.devices_bar);bar.setContentsMargins(0,0,0,0)
@@ -1082,7 +1086,7 @@ class CameraPage(QWidget):
         self.form_panel.setEnabled(False);self.devices_bar.setEnabled(False)
         self.files_button.setEnabled(False);self.connection_button.setEnabled(False);self.language_box.setEnabled(False)
         self.compare_button.setEnabled(False);self.write_button.setEnabled(False);self.export_button.setEnabled(False)
-        self.progress.setRange(0,0);self.progress.show();self.notify({'scan':'正在枚举相机…','inspect':'正在读取设备参数并对比预设…','compare':'正在核对设备能力与计算后的写入参数…','write':'正在写入所选相机…'}[action]);self.worker.start()
+        self.progress.setRange(0,0);self.progress.show();self.notify({'scan':'正在枚举相机…','inspect':'正在读取设备参数并对比预设…','compare':'正在核对设备能力与计算后的写入参数…','write':'正在写入所选相机…','mfa':'正在备份并导入MFA用户集…'}[action]);self.worker.start()
 
     def finished_result(self,action,data):
         if action=='scan':
@@ -1128,6 +1132,12 @@ class CameraPage(QWidget):
             self.result_tabs.setCurrentIndex(2)
             self.write_status.setText('预检通过 · '+data['device']['model']+' / '+data['device']['serial']+' · '+str(sum(r['status']=='修改' for r in data['rows']))+' 项修改，可写入相机并保存。' if data['ready'] else '暂不能写入：'+'；'.join(data['errors']))
             self.notify('写入计划已生成，点击“写入相机并保存”执行。' if data['ready'] else '暂不能写入：'+'；'.join(data['errors']),not data['ready'])
+        elif action=='mfa':
+            self.last_report=data;self.invalidate_preview();self.snapshot=data.get('after');self.geometry=None;self.output_caps={}
+            self.refresh_output_choices();self.refresh_preset_comparison();self.log.setPlainText(json.dumps(data,ensure_ascii=False,indent=2));self.result_tabs.setCurrentIndex(3)
+            actual={r['entry']['key']:r['value'] for r in (self.snapshot or {}).get('rows',[]) if not r['entry']['selectors']}
+            self.write_status.setText('MFA文件写后核对一致，已发送加载；加载完成状态尚未确认。')
+            self.notify('MFA文件核对一致；当前读数 Height='+str(actual.get('Height','未读到'))+'，ExposureTime='+str(actual.get('ExposureTime','未读到'))+'。请读取并对比设备参数。')
         else:
             self.last_report=data;self.invalidate_preview();self.snapshot=None;self.output_caps={}
             self.refresh_output_choices();self.refresh_preset_comparison();self.log.setPlainText(json.dumps(data,ensure_ascii=False,indent=2));self.result_tabs.setCurrentIndex(3)
@@ -1176,6 +1186,21 @@ class CameraPage(QWidget):
             if Path(path).stat().st_size>1_000_000:raise CameraError('MFS超过1MB。')
             s,count=import_mfs_text(Path(path).read_text(encoding='utf-8-sig'),self.settings());self.load_settings(s)
             self.notify('已解析 '+str(count)+' 项参考记录；只采用已支持字段。P/R、FOV、计数倍率和工位尺寸仍需现场给定。')
+        except Exception as exc:self.notify(str(exc),True)
+
+    def open_mfa(self):
+        if self.is_busy():return
+        device=self.connected_device()
+        if not device:self.notify('请先枚举并选择目标相机。',True);return
+        path,_=QFileDialog.getOpenFileName(self,'选择当前设备导出的User Set 1备份','','MFA (*.mfa)')
+        if not path:return
+        try:
+            import hashlib
+            from camera_mfa import read_mfa
+            digest=hashlib.sha256(read_mfa(path)).hexdigest()
+            text='目标：'+device['model']+' / '+device['serial']+'\n文件：'+str(path)+'\n\n将先备份设备用户集1，再导入此文件并发送加载。恢复的是文件中的参数，不会应用左侧计算值；不主动设置默认启动组。加载后需核对设备当前读数。'
+            if QMessageBox.question(self,'导入MFA到设备',text,QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:return
+            self.invalidate_preview();self.launch('mfa',{'uid':self.selected_uid(),'path':path,'sha256':digest})
         except Exception as exc:self.notify(str(exc),True)
 
     def export_report(self):

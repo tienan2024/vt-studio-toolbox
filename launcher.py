@@ -401,6 +401,10 @@ def verify_package(report_path):
             camera_page.preset_store=original_model_store
             camera_page.load_settings(original_camera_settings)
             report['camera_auto_device_model']=True
+            from camera_mfa import read_mfa
+            if not any('MFA' in action.text() for action in camera_page.files_button.menu().actions()):
+                raise RuntimeError('MFA import entry missing')
+            report['camera_mfa_import']=True
             from diagnostic_log import setup_logging,snapshot
             debug_store=setup_logging();debug_path=snapshot('package-check',{'test_only':True})
             if not debug_store or not debug_path.is_file() or 'camera' not in toolbox.diagnostic_state():
