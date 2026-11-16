@@ -5,6 +5,7 @@ import math
 from camera_model import (CameraError,calculate,settings_from_dict,node_id,fingerprint)
 from camera_sdk import open_camera,NodeUnavailable
 from diagnostic_log import event,snapshot
+from camera_options import model_identity
 
 
 class CameraWriteError(CameraError):
@@ -113,6 +114,8 @@ def _verify_capacity(camera,settings):
 def compare(camera,settings):
     geometry=camera.geometry();geometry['area']=settings.kind=='area'
     plan=calculate(settings,geometry['limits']);errors=list(plan['blocking']);rows=[]
+    if settings.camera_model_id and model_identity(settings.camera_model_id)!=model_identity(camera.device.get('model','')):
+        errors.append('配置机型 '+settings.camera_model_id+' 与所选设备 '+str(camera.device.get('model',''))+' 不一致，请按所选设备重新计算。')
     if settings.kind=='line' and settings.line_source=='FrequencyConverter' and settings.auto_frequency and not plan['metrics']['frequency_pending'] and (not plan['metrics']['frequency_solution'] or not plan['metrics']['frequency_solution']['limits_verified']):
         errors.append('自动倍分频缺少设备的完整范围，请读取设备或核对节点支持。')
     if settings.sensor_width!=geometry['sensor_width']:errors.append('配置传感器宽度与设备不同，请先读取设备尺寸。')

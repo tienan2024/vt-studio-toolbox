@@ -67,14 +67,17 @@ class CameraSnapshotDesktopTests(unittest.TestCase):
                 p.controls['gain'].setValue(7);p.lock_buttons['working_distance_mm'].click();p.recalculate()
                 p.page_preset_controls['trigger'][0].setCurrentIndex(1)
                 original=config_dict(p.settings(validate=False));locks=dict(p.fixed_values);presets=copy.deepcopy(p.preset_store.data)
-                camera=FakeCamera();p.device.addItem('SIMULATED CAMERA',camera.device['uid']);p.device.setCurrentIndex(1)
+                camera=FakeCamera();camera.device['model']=original['camera_model_id']
+                geometry=camera.geometry();geometry['sensor_width']=original['sensor_width']
+                camera.geometry=lambda:copy.deepcopy(geometry)
+                p.device.addItem('SIMULATED CAMERA',camera.device['uid']);p.device.setCurrentIndex(1)
                 with patch('camera_transaction.open_camera') as opened:
                     opened.return_value.__enter__.return_value=camera;data=inspect_camera(camera.device['uid'])
                 p.finished_result('inspect',data);p.update_actions();QTest.qWait(220)
                 self.assertEqual(config_dict(p.settings(validate=False)),original);self.assertEqual(p.fixed_values,locks)
                 self.assertEqual(p.preset_store.data,presets);self.assertEqual(p.page_preset_controls['trigger'][0].currentIndex(),1)
                 self.assertEqual(p.result_tabs.currentIndex(),1);self.assertFalse(p.device_actions.isHidden())
-                self.assertFalse(p.write_button.isEnabled());self.assertIn('SIMULATED CAMERA',p.device_status.text())
+                self.assertFalse(p.write_button.isEnabled());self.assertIn(camera.device['model'],p.device_status.text())
                 p.load_settings(CameraSettings());preview=compare(camera,p.settings());self.assertTrue(preview['ready'])
                 p.finished_result('compare',preview);p.update_actions()
                 self.assertEqual(p.result_tabs.currentIndex(),2);self.assertTrue(p.write_button.isEnabled())

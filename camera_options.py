@@ -1,4 +1,13 @@
 """Reference presets and display labels; SDK values are never translated."""
+def model_identity(model):
+    """Ignore display whitespace/case, never drop hardware version or suffixes."""
+    return ' '.join(str(model or '').split()).casefold()
+
+
+def model_preset(model):
+    return next((p for p in PRESETS.values() if model_identity(p['model'])==model_identity(model)),None)
+
+
 PRESETS={
     'line2k':{'kind':'line','sensor_width':2048,'sensor_height':2,'pixel_pitch_um':7.0,'model':'MV-CL024-91GM','color':False,'id':9570},
     'line2k_color':{'kind':'line','sensor_width':2048,'sensor_height':3,'pixel_pitch_um':7.0,'model':'MV-CL024-91GC','color':True,'id':9576},

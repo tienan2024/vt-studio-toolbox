@@ -383,6 +383,14 @@ def verify_package(report_path):
             if next(r for r in raw_rows if r['field']=='frame_line')['status']!='未读取':
                 raise RuntimeError('Preset comparison must remain independent of calculation')
             report['camera_read_compare_write_workflow']=True
+            original_camera_settings=camera_page.settings(validate=False)
+            camera_page.finished_result('scan',{'sdk_version':'package-check','devices':[
+                {'uid':'package-check:mono','model':'MV-CL024-91GM','serial':'TEST','transport':'GigE'}]})
+            if camera_page.camera_type.currentData()!='line2k' or camera_page.camera_type.isEnabled():
+                raise RuntimeError('Frozen camera model did not follow the selected device')
+            camera_page.finished_result('scan',{'sdk_version':'package-check','devices':[]})
+            camera_page.load_settings(original_camera_settings)
+            report['camera_auto_device_model']=True
             from diagnostic_log import setup_logging,snapshot
             debug_store=setup_logging();debug_path=snapshot('package-check',{'test_only':True})
             if not debug_store or not debug_path.is_file() or 'camera' not in toolbox.diagnostic_state():

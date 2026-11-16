@@ -12,7 +12,7 @@ from styled_controls import make_combo,style_control
 from camera_model import CameraSettings,CameraError,calculate,config_dict,settings_from_dict,import_mfs_text,fingerprint,workflow_settings
 from camera_sdk import discover_mvs,enumerate_cameras
 from camera_transaction import inspect_camera,preview_camera,write_camera
-from camera_options import PRESETS,FIELD_LABELS,LABELS,option_label
+from camera_options import PRESETS,FIELD_LABELS,LABELS,option_label,model_identity,model_preset
 from camera_constraints import resolve_fixed_values,within_precision
 from camera_presets import CameraPresetStore
 from camera_snapshot import compare_presets,PAGE_NAMES
@@ -183,7 +183,7 @@ class CameraPage(QWidget):
         self.worker=None;self.preview=None;self.last_report=None;self.geometry=None;self.plan=None;self._loading=False
         self.controls={};self.labels={};self.field_forms={};self.field_titles={};self.property_forms=[];self.input_forms=[];self._input_fit_pending=False;self.language='zh';self.output_caps={}
         self.fixed_values={};self.lock_buttons={}
-        self.preset_store=CameraPresetStore();self.page_preset_controls={};self.snapshot=None
+        self.preset_store=CameraPresetStore();self.page_preset_controls={};self.snapshot=None;self.device_records={}
         self.sdk=discover_mvs();root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(10)
         tools=QHBoxLayout();tools.addStretch()
         self.language_box=self.styled_combo();self.language_box.addItem('中文','zh');self.language_box.addItem('English','en')
@@ -339,7 +339,6 @@ class CameraPage(QWidget):
         filters=QHBoxLayout();self.diff_scope=self.styled_combo();self.diff_scope.addItem('当前参数页',False);self.diff_scope.addItem('全部参数',True);filters.addWidget(self.diff_scope)
         self.diff_only=QCheckBox('仅看差异');filters.addWidget(self.diff_only);filters.addStretch();diff_layout.addLayout(filters)
         self.diff_summary=QLabel('选择设备后点击“读取并对比”。');self.diff_summary.setWordWrap(True);diff_layout.addWidget(self.diff_summary)
-        self.adopt_button=self.button('采用设备机型',self.adopt_device_model,filters);self.adopt_button.setEnabled(False)
         self.preset_table=self.table(['参数 / 上下文','设备当前值','所选预设值','状态']);diff_layout.addWidget(self.preset_table,1)
         plan_page=QWidget();plan_layout=QVBoxLayout(plan_page);plan_layout.setContentsMargins(10,10,10,10)
         self.write_status=QLabel('先读取设备，再校验当前设置的计算结果。');self.write_status.setWordWrap(True);plan_layout.addWidget(self.write_status)
@@ -382,7 +381,7 @@ class CameraPage(QWidget):
     def apply_page_preset(self,page):
         try:
             slot=self.page_preset_controls[page][0].currentIndex();before=self.settings(validate=False)
-            settings=replace(before,**self.preset_store.values(page,slot))
+            settings=self.match_device_settings(replace(before,**self.preset_store.values(page,slot)))
             if page=='imaging' and settings.width_override+settings.offset_x>settings.sensor_width:
                 raise CameraError('参考ROI超出当前相机宽度，请先在材料页应用参考相机，或保存适合当前相机的预设。')
             if (settings.kind,settings.sensor_width,settings.camera_model_id)!=(before.kind,before.sensor_width,before.camera_model_id):self.geometry=None;self.output_caps={}
@@ -430,23 +429,39 @@ class CameraPage(QWidget):
         self.preview=None;self.write_button.setEnabled(False);self.compare_table.setRowCount(0)
         self.write_status.setText('当前设置尚未校验，请生成写入计划。')
 
-    def adopt_device_model(self):
-        if not self.snapshot or self.is_busy():return
-        geometry=self.snapshot['geometry'];model=self.snapshot['device'].get('model','')
-        matched=next((p for p in PRESETS.values() if model==p['model']),None)
-        settings=self.settings(validate=False);scan=geometry.get('scan_type','').lower()
-        if 'line' in scan:settings.kind='line'
-        elif 'area' in scan:settings.kind='area'
-        elif matched:settings.kind=matched['kind']
-        settings.sensor_width=geometry['sensor_width'];settings.camera_model_id=matched['model'] if matched else ''
-        if settings.kind=='area':settings.sensor_height=geometry['sensor_height']
-        settings.frame_selector='FrameBurstStart' if settings.kind=='line' else 'FrameStart'
+    def connected_device(self):
+        uid=self.selected_uid()
+        if uid and self.geometry and self.geometry.get('device',{}).get('uid')==uid:return self.geometry['device']
+        return self.device_records.get(uid)
+
+    def match_device_settings(self,settings):
+        """Device identity wins over file/page presets; keep workstation and imaging inputs."""
+        device=self.connected_device()
+        if not device:return settings
+        geometry=self.geometry or {};model=device.get('model','');matched=model_preset(model)
+        changed=model_identity(settings.camera_model_id)!=model_identity(model)
+        values={'camera_model_id':matched['model'] if matched else model}
         if matched:
-            settings.pixel_pitch_um=matched['pixel_pitch_um'];settings.focal_length_mm=matched['focal_length_mm']
-            if settings.kind=='line':settings.sensor_height=matched['sensor_height']
-        else:settings.pixel_pitch_um=0
-        self.load_settings(settings)
-        self.notify('已带入设备机型和尺寸，请核对镜头、工位参数及接线。')
+            values.update({key:matched[key] for key in ('kind','sensor_width','sensor_height','pixel_pitch_um','focal_length_mm')})
+        elif changed:
+            values.update(pixel_pitch_um=0,focal_length_mm=0)
+        scan=geometry.get('scan_type','').lower()
+        if 'line' in scan:values['kind']='line'
+        elif 'area' in scan:values['kind']='area'
+        if geometry.get('sensor_width'):values['sensor_width']=geometry['sensor_width']
+        if values.get('kind',settings.kind)=='area' and geometry.get('sensor_height'):values['sensor_height']=geometry['sensor_height']
+        kind=values.get('kind',settings.kind)
+        if kind!=settings.kind or changed:values['frame_selector']='FrameBurstStart' if kind=='line' else 'FrameStart'
+        for key,value in values.items():
+            # Material/distance locks remain; a previous sensor/lens cannot pin another device.
+            if key in self.fixed_values and self.fixed_values[key]!=value:
+                self.fixed_values.pop(key)
+        result=replace(settings,**values)
+        if result!=settings:
+            from diagnostic_log import event
+            event('camera','device_model_matched',device=device,previous_model=settings.camera_model_id,
+                  model=result.camera_model_id,source='device_readback' if geometry else 'enumeration')
+        return result
 
     @staticmethod
     def table(headers):
@@ -559,6 +574,7 @@ class CameraPage(QWidget):
 
     def preset_changed(self,*args):
         if self._loading:return
+        if self.connected_device():self.sync_preset();return
         preset=PRESETS.get(self.camera_type.currentData())
         if not preset:
             s=self.settings(validate=False);s.camera_model_id='';self.load_settings(s,preserve_locks=True);return
@@ -588,7 +604,12 @@ class CameraPage(QWidget):
         if self.camera_type.findData(key)<0:self.camera_type.addItem(option_label(key,self.language),key)
         previous=self.camera_type.blockSignals(True);self.camera_type.setCurrentIndex(self.camera_type.findData(key));self.camera_type.blockSignals(previous)
         preset=PRESETS.get(key);spec=str(width)+(' × '+str(height) if kind=='area' else '')+' px'
-        self.camera_info.setText(spec+' · '+str(self.controls['pixel_pitch_um'].value())+' μm'+('\n'+preset['lens_model']+' · '+str(preset['focal_length_mm'])+' mm' if preset else ' · 自定义 / 设备读回'))
+        model=self.controls['camera_model_id'].text()
+        self.camera_type.setItemText(self.camera_type.findData('custom'),model+' · '+('Custom' if self.language=='en' else '自定义') if model and not preset else option_label('custom',self.language))
+        self.camera_type.setEnabled(self.connected_device() is None)
+        self.camera_type.setToolTip(('Model follows selected device' if self.language=='en' else '型号随所选设备自动匹配') if self.connected_device() else '')
+        pitch=self.controls['pixel_pitch_um'].value()
+        self.camera_info.setText(spec+(' · '+str(pitch)+' μm' if pitch else ' · 像元待填写')+('\n'+preset['lens_model']+' · '+str(preset['focal_length_mm'])+' mm' if preset else ' · 自定义 / 设备读回'))
         self.camera_info.setToolTip(preset['source'] if preset else '配置未匹配完整型号；固定参数可在工位标定中编辑。')
 
     def optical_mode_changed(self,*args):
@@ -672,6 +693,7 @@ class CameraPage(QWidget):
         label=QLabel(text);label.setWordWrap(True);label.setObjectName('Subtle');form.addRow(label)
 
     def load_settings(self,settings,preserve_locks=False):
+        settings=self.match_device_settings(settings)
         if settings.kind=='line' and not settings.auto_frequency and any(not 1<=getattr(settings,k)<=5 for k in ('pre_divider','multiplier','post_divider')):
             raise CameraError('旧配置的手动倍分频超出1～5，请先修正配置后导入。')
         self._loading=True
@@ -970,19 +992,19 @@ class CameraPage(QWidget):
         self.inspect_button.setEnabled(selected and not busy);self.compare_button.setEnabled(selected and self.plan is not None and not busy)
         self.write_button.setEnabled(bool(self.preview and self.preview.get('ready')) and not busy)
         self.export_button.setEnabled(self.last_report is not None and not busy)
-        self.adopt_button.setEnabled(self.snapshot is not None and not busy)
         self.write_button.setToolTip('将本次校验后的计算参数写入相机，保存并加载UserSet1，读回核对并设为默认。' if self.preview and self.preview.get('ready') else '先选择相机并生成有效的写入计划。')
 
     def device_changed(self,*args):
         self.geometry=None;self.preview=None;self.last_report=None;self.output_caps={};self.snapshot=None
         if hasattr(self,'write_button'):
+            self.load_settings(self.settings(validate=False),preserve_locks=True)
             self.invalidate_preview();self.refresh_output_choices();self.refresh_preset_comparison();self.update_actions()
-            self.device_status.setText('已选择设备，请读取并对比。' if self.selected_uid() else '尚未读取设备')
+            self.device_status.setText('已按所选设备匹配机型，请读取并对比。' if self.connected_device() else '已选择设备，请读取并对比。' if self.selected_uid() else '尚未读取设备')
 
     def choose_sdk(self):
         path=QFileDialog.getExistingDirectory(self,'选择MVS安装目录或MvImport目录',self.sdk)
         if path:
-            try:self.sdk=discover_mvs(path);self.device.clear();self.device.addItem('请重新枚举相机',None);self.notify('MVS目录已更新。')
+            try:self.sdk=discover_mvs(path);self.device_records={};self.device.clear();self.device.addItem('请重新枚举相机',None);self.notify('MVS目录已更新。')
             except Exception as exc:self.notify(str(exc),True)
 
     def start_job(self,action):
@@ -1012,23 +1034,26 @@ class CameraPage(QWidget):
         self.form_panel.setEnabled(False);self.devices_bar.setEnabled(False)
         self.files_button.setEnabled(False);self.connection_button.setEnabled(False);self.language_box.setEnabled(False)
         self.compare_button.setEnabled(False);self.write_button.setEnabled(False);self.export_button.setEnabled(False)
-        self.adopt_button.setEnabled(False)
         self.progress.setRange(0,0);self.progress.show();self.notify({'scan':'正在枚举相机…','inspect':'正在读取设备参数并对比预设…','compare':'正在核对设备能力与计算后的写入参数…','write':'正在写入所选相机…'}[action]);self.worker.start()
 
     def finished_result(self,action,data):
         if action=='scan':
-            self.device.clear()
+            previous_uid=self.selected_uid();blocked=self.device.blockSignals(True)
+            self.device_records={d['uid']:dict(d) for d in data['devices']};self.device.clear()
             if not data['devices']:self.device.addItem('未发现 GigE / USB3 或对应虚拟相机',None)
             for d in data['devices']:self.device.addItem(d['model']+' · '+d['serial']+' · '+d.get('ip',d['transport']),d['uid'])
-            self.notify('MVS '+data['sdk_version']+'：发现 '+str(len(data['devices']))+' 台相机。'+('请检查供电、网络与设备连接。' if not data['devices'] else '请选择目标后读取并对比。'))
+            if previous_uid in self.device_records:self.device.setCurrentIndex(self.device.findData(previous_uid))
+            self.device.blockSignals(blocked);self.device_changed()
+            self.notify('MVS '+data['sdk_version']+'：发现 '+str(len(data['devices']))+' 台相机。'+('请检查供电、网络与设备连接。' if not data['devices'] else '已自动匹配所选设备机型，请读取并对比。'))
             self.last_report=data
         elif action=='inspect':
             self.geometry=data;self.snapshot=data.get('snapshot');self.output_caps=data.get('output_source_choices',{})
+            self.load_settings(self.settings(validate=False),preserve_locks=True)
             self.apply_enum_choices('pixel_format',['',*data.get('pixel_format',{}).get('choices',[])])
             for key,choices in data.get('trigger_io_choices',{}).items():self.apply_enum_choices(key,choices)
             self.refresh_output_choices();self.refresh_preset_comparison();self.result_tabs.setCurrentIndex(1)
             self.device_status.setText(data['device']['model']+' · '+data['device']['serial']+' · 读取于 '+(self.snapshot['read_at'] if self.snapshot else '本次'))
-            self.notify('设备参数已读取，当前编辑值保留。载入或调整参数后，可生成写入计划。')
+            self.notify('设备型号和尺寸已自动匹配，工位与成像输入保留。可继续调整并生成写入计划。')
             self.log.setPlainText(json.dumps(data,ensure_ascii=False,indent=2))
             self.last_report=data
         elif action=='compare':
