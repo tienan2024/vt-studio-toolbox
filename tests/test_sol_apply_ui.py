@@ -35,10 +35,10 @@ class SolApplicationDesktopTests(unittest.TestCase):
         try:
             def fail(**kwargs):time.sleep(.02);raise SolApplyError('SIMULATED SDK failure')
             with patch('sol_apply_ui.apply_script',side_effect=fail):
-                p.start_sol_application(request);self.assertFalse(p.variables.isEnabled())
+                p.start_sol_application(request);self.assertFalse(p.variables.isEnabled());self.assertFalse(p.sol_panel.isEnabled())
                 end=time.monotonic()+5
                 while p.is_busy() and time.monotonic()<end:self.app.processEvents();time.sleep(.01)
-            self.app.processEvents();self.assertFalse(p.is_busy());self.assertTrue(p.variables.isEnabled())
+            self.app.processEvents();self.assertFalse(p.is_busy());self.assertTrue(p.variables.isEnabled());self.assertTrue(p.sol_panel.isEnabled())
             self.assertIsNone(request['password']);self.assertIn('SIMULATED SDK failure',p.message.text())
             self.assertNotIn('SIMULATED_CREDENTIAL',p.message.text())
         finally:p.deleteLater();self.app.processEvents()

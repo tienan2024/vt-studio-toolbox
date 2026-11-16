@@ -136,7 +136,7 @@ class Camera:
             value=self.p.MVCC_STRINGVALUE();_check(self.handle.MV_CC_GetStringValue(key,value),'读取'+key)
             result.update(value=_text(value.chCurValue),max_length=int(value.nMaxLength))
         else:
-            value=self.p.MVCC_ENUMVALUE_EX();_check(self.handle.MV_CC_GetEnumValueEx(key,value),'读取'+key)
+            value=self.p.MVCC_ENUMVALUE();_check(self.handle.MV_CC_GetEnumValue(key,value),'读取'+key)
             if value.nSupportedNum>len(value.nSupportValue):raise CameraError('枚举值数量无效：'+key)
             def symbol(number):
                 entry=self.p.MVCC_ENUMENTRY();entry.nValue=number

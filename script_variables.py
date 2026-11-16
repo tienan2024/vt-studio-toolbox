@@ -26,20 +26,25 @@ class VariablesPanel(QWidget):
     apply_requested=Signal(object)
     write_requested=Signal(object)
 
-    def __init__(self,factory,parent=None):
+    def __init__(self,factory,parent=None,external_sol=False):
         super().__init__(parent);self.job=None;self.metadata=None;self.rows=[];self.template_rows=[];self._loading=False
         self.pending_password=False;self.last_error='';self.path=''
+        self.external_sol=external_sol
         layout=QVBoxLayout(self);layout.setContentsMargins(12,12,12,12);layout.setSpacing(12)
         actions=QHBoxLayout();self.source=QComboBox();self.source.addItem('当前生成脚本');actions.addWidget(self.source,1)
-        self.open_button=QPushButton('打开 SOL');actions.addWidget(self.open_button);layout.addLayout(actions)
+        layout.addLayout(actions)
+        self.sol_controls=QWidget(self);self.sol_controls.setObjectName('SolTargetPanel')
+        sol=QVBoxLayout(self.sol_controls);sol.setContentsMargins(10,8,10,8);sol.setSpacing(8)
+        top=QHBoxLayout();self.open_button=QPushButton('打开 SOL');top.addWidget(self.open_button)
+        self.path_display=QLineEdit();self.path_display.setReadOnly(True)
+        self.path_display.setPlaceholderText('打开 SOL 方案，选择要修改的脚本模块');top.addWidget(self.path_display,1)
+        self.write_button=QPushButton('应用脚本到 SOL');self.write_button.setObjectName('Primary');top.addWidget(self.write_button);sol.addLayout(top)
         self.selectors=QWidget();select=QHBoxLayout(self.selectors);select.setContentsMargins(0,0,0,0)
         select.addWidget(QLabel('流程'));self.flow=QComboBox();select.addWidget(self.flow,1)
         select.addWidget(QLabel('脚本'));self.module=QComboBox();select.addWidget(self.module,1)
-        self.apply_button=QPushButton('使用此模块变量');select.addWidget(self.apply_button);layout.addWidget(self.selectors);self.selectors.hide()
-        self.write_bar=QWidget();write=QHBoxLayout(self.write_bar);write.setContentsMargins(0,0,0,0)
-        hint=QLabel('将当前生成脚本应用到所选模块，另存为新方案。');hint.setWordWrap(True);write.addWidget(hint,1)
-        self.write_button=QPushButton('应用脚本到 SOL');self.write_button.setObjectName('Primary');write.addWidget(self.write_button)
-        layout.addWidget(self.write_bar);self.write_bar.hide()
+        self.apply_button=QPushButton('使用此模块变量');select.addWidget(self.apply_button);sol.addWidget(self.selectors)
+        self.status=QLabel();self.status.setWordWrap(True);self.status.setTextFormat(Qt.TextFormat.PlainText);sol.addWidget(self.status)
+        layout.addWidget(self.sol_controls)
         self.info=QLabel('双击变量名或说明即可编辑；类型由脚本用途确定。修改会同步到代码与离线测试。')
         self.info.setObjectName('Subtle');self.info.setWordWrap(True);self.info.setTextFormat(Qt.TextFormat.PlainText);layout.addWidget(self.info)
         groups=QSplitter(Qt.Orientation.Vertical);groups.setChildrenCollapsible(False);groups.setHandleWidth(12)
@@ -56,11 +61,11 @@ class VariablesPanel(QWidget):
             table.itemChanged.connect(self.cell_changed);box.addWidget(table);groups.addWidget(group)
             self.groups[direction]=group;self.tables[direction]=table
         groups.setSizes([320,200]);groups.setStretchFactor(0,3);groups.setStretchFactor(1,2);layout.addWidget(groups,1)
-        self.status=QLabel();self.status.setWordWrap(True);self.status.setTextFormat(Qt.TextFormat.PlainText);layout.addWidget(self.status)
         self.open_button.clicked.connect(self.open_sol);self.source.currentIndexChanged.connect(self.show_source)
         self.flow.currentIndexChanged.connect(self.select_flow);self.module.currentIndexChanged.connect(self.show_source)
         self.apply_button.clicked.connect(lambda:self.apply_requested.emit(self.selected_module()))
         self.write_button.clicked.connect(lambda:self.write_requested.emit(self.selected_module()))
+        self.set_controls(True)
 
     def set_template(self,rows):
         self.template_rows=rows
@@ -87,8 +92,7 @@ class VariablesPanel(QWidget):
 
     def show_source(self,*args):
         reference=self.source.currentIndex()!=0
-        self.selectors.setVisible(reference)
-        self.write_bar.setVisible(reference)
+        self.selectors.setVisible(self.external_sol or reference)
         if not reference:
             self.info.setText('双击变量名或说明即可编辑；类型由脚本用途确定。修改会同步到代码与离线测试。')
             self.render(self.template_rows,True)
@@ -99,8 +103,8 @@ class VariablesPanel(QWidget):
                     rows.extend(dict(p,direction=direction,role='SOL端口') for p in module[key])
             self.info.setText('SOL 原始变量只读显示。应用到当前 NG 模板后可编辑名称；原方案不会被修改。')
             self.render(rows,False)
-        self.apply_button.setEnabled(reference and self.selected_module() is not None and not self.is_busy())
-        self.write_button.setEnabled(reference and self.selected_module() is not None and not self.is_busy())
+        self.apply_button.setEnabled(self.selected_module() is not None and not self.is_busy())
+        self.write_button.setEnabled(self.selected_module() is not None and not self.is_busy())
 
     def selected_module(self):
         ident=self.module.currentData()
@@ -113,6 +117,7 @@ class VariablesPanel(QWidget):
         self.module.blockSignals(False);self.show_source()
 
     def set_metadata(self,data):
+        self.path_display.setText(data['path']);self.path_display.setToolTip(data['path'])
         self.metadata=data;self.flow.blockSignals(True);self.flow.clear();seen=set()
         for script in data['scripts']:
             if script['flow_id'] not in seen:self.flow.addItem(script['flow'],script['flow_id']);seen.add(script['flow_id'])
@@ -122,10 +127,11 @@ class VariablesPanel(QWidget):
         else:self.source.setItemText(1,'SOL：'+Path(data['path']).name)
         self.source.setCurrentIndex(1);self.source.blockSignals(False);self.select_flow()
         self.status.setText('已读取 '+str(len(data['scripts']))+' 个脚本模块；未运行或保存原 SOL。')
+        self.set_controls(not self.is_busy())
 
     def open_sol(self):
         if self.is_busy():return
-        path,_=QFileDialog.getOpenFileName(self,'读取流程中的脚本变量','','VisionMaster (*.sol)')
+        path,_=QFileDialog.getOpenFileName(self,'打开 SOL 方案',self.path,'VisionMaster (*.sol)')
         if path:self.start_read(path)
 
     def start_read(self,path,password=None):
@@ -146,8 +152,10 @@ class VariablesPanel(QWidget):
             else:self.status.setText('已取消密码输入；当前清单保持不变。')
 
     def set_controls(self,enabled):
-        for widget in (self.source,self.flow,self.module,self.open_button):widget.setEnabled(enabled)
-        self.apply_button.setEnabled(enabled and self.source.currentIndex()!=0 and self.selected_module() is not None)
-        self.write_button.setEnabled(enabled and self.source.currentIndex()!=0 and self.selected_module() is not None)
+        self.source.setEnabled(enabled);self.open_button.setEnabled(enabled)
+        self.flow.setEnabled(enabled and self.flow.count()>0);self.module.setEnabled(enabled and self.module.count()>0)
+        self.selectors.setVisible(self.external_sol or self.source.currentIndex()!=0)
+        self.apply_button.setEnabled(enabled and self.selected_module() is not None)
+        self.write_button.setEnabled(enabled and self.selected_module() is not None)
 
     def is_busy(self):return self.job is not None

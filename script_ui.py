@@ -94,19 +94,20 @@ class ScriptPage(QWidget):
         column=QWidget();column.setMinimumWidth(355);column_layout=QVBoxLayout(column);column_layout.setContentsMargins(0,0,0,0)
         column_layout.addWidget(scroll,1);split.addWidget(column)
         right=QWidget();right_layout=QVBoxLayout(right);right_layout.setContentsMargins(8,0,0,0);right_layout.setSpacing(8)
-        toolbar=QHBoxLayout();note=QLabel('可复制到 VM，也可在变量清单中自动应用到 SOL。');note.setObjectName('Subtle');note.setWordWrap(True);toolbar.addWidget(note,1)
-        self.copy_button=self.button('复制脚本',self.copy_code,toolbar);self.copy_button.setObjectName('Primary');self.save_cs_button=self.button('保存 .cs',self.save_cs,toolbar);right_layout.addLayout(toolbar)
+        toolbar=QHBoxLayout();note=QLabel('修改产品规则，预览将应用到目标模块的脚本。');note.setObjectName('Subtle');note.setWordWrap(True);toolbar.addWidget(note,1)
+        self.copy_button=self.button('复制脚本',self.copy_code,toolbar);self.save_cs_button=self.button('保存 .cs',self.save_cs,toolbar);right_layout.addLayout(toolbar)
         self.tabs=QTabWidget();right_layout.addWidget(self.tabs,1);self.code_views=[]
         for filename in ('脚本代码',):
             view=CSharpPreview()
             self.code_views.append(view);self.tabs.addTab(view,filename)
-        self.make_test_panel();self.variables=VariablesPanel(self.table,self)
+        self.make_test_panel();self.variables=VariablesPanel(self.table,self,external_sol=True)
+        self.sol_panel=self.variables.sol_controls;root.insertWidget(0,self.sol_panel)
         self.variables.edited.connect(self.edit_variable);self.variables.apply_requested.connect(self.choose_sol_mapping)
         self.variables.write_requested.connect(self.review_sol_application)
         self.tabs.addTab(self.variables,'变量清单')
         split.addWidget(right);split.setStretchFactor(0,0);split.setStretchFactor(1,1);split.setSizes([400,800])
         self.progress=QProgressBar();self.progress.setTextVisible(False);self.progress.setFixedHeight(5);self.progress.hide();root.addWidget(self.progress)
-        self.message=QLabel('粘贴 NGtype 后生成脚本；复制或保存 .cs，在 VM 中按变量清单手工配置端口。');self.message.setObjectName('Message');self.message.setWordWrap(True);root.addWidget(self.message)
+        self.message=QLabel('打开 SOL 并选择目标脚本模块，配置规则后点击“应用脚本到 SOL”。');self.message.setObjectName('Message');self.message.setWordWrap(True);root.addWidget(self.message)
         self.message.setTextFormat(Qt.TextFormat.PlainText)
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.timeout.connect(self.refresh)
         self.product.textChanged.connect(self.changed);self.use_ai.toggled.connect(self.changed)
@@ -286,6 +287,8 @@ class ScriptPage(QWidget):
 
     def review_sol_application(self,module):
         if self.is_busy():return
+        if module is None or not self.variables.metadata:
+            self.notify('请先打开 SOL 并选择目标脚本模块。',True);return
         c=self.refresh()
         if c is None:return
         try:
@@ -302,7 +305,7 @@ class ScriptPage(QWidget):
         self.worker=SolApplyJob(request,self);self.worker.result.connect(self.test_finished)
         self.worker.failed.connect(self.test_failed);self.worker.finished.connect(self.job_stopped)
         self.worker.progress.connect(self.notify)
-        for widget in (self.config_panel,self.test_inputs,self.run_button,self.regression_button,self.save_cs_button,self.variables):widget.setEnabled(False)
+        for widget in (self.config_panel,self.test_inputs,self.run_button,self.regression_button,self.save_cs_button,self.variables,self.sol_panel):widget.setEnabled(False)
         self.progress.setRange(0,0);self.progress.show();self.notify('正在准备 VM 编译与方案另存…');self.worker.start()
 
     def add_alias(self):
@@ -416,6 +419,7 @@ class ScriptPage(QWidget):
         self.config_panel.setEnabled(False);self.test_inputs.setEnabled(False);self.run_button.setEnabled(False);self.regression_button.setEnabled(False)
         self.save_cs_button.setEnabled(False)
         self.variables.setEnabled(False)
+        self.sol_panel.setEnabled(False)
         self.progress.setRange(0,0);self.progress.show();self.test_status.setText('正在编译并执行 C#…');self.notify('正在编译生成的源码并运行离线用例…');self.worker.start()
 
     def test_failed(self,text):
@@ -443,6 +447,7 @@ class ScriptPage(QWidget):
         self.config_panel.setEnabled(True);self.test_inputs.setEnabled(True);self.run_button.setEnabled(True);self.regression_button.setEnabled(True);self.progress.hide()
         self.save_cs_button.setEnabled(True)
         self.variables.setEnabled(True)
+        self.sol_panel.setEnabled(True)
         job=self.worker;self.worker=None;job.deleteLater()
 
     def is_busy(self):return self.worker is not None or self.variables.is_busy()

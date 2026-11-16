@@ -331,6 +331,11 @@ def verify_package(report_path):
             if panel.flow.currentText()!='Inspection' or panel.tables['输入'].rowCount()!=1 or panel.tables['输出'].rowCount()!=1 or before!=sol_path.read_bytes():
                 raise RuntimeError('Frozen SOL metadata extraction failed: '+panel.status.text())
             report.update(script_editable_ports=True,script_variable_groups=True,sol_readonly_ports=True)
+            script_page.tabs.setCurrentIndex(0);panel.source.setCurrentIndex(0);app.processEvents()
+            if (not panel.open_button.isVisible() or not panel.write_button.isVisible() or not panel.write_button.isEnabled()
+                    or panel.isAncestorOf(panel.open_button) or not panel.selectors.isVisible()):
+                raise RuntimeError('SOL open/target/apply must stay in the main script workspace')
+            report['script_sol_main_workflow']=True
             bridge=Path(__file__).resolve().parent/'vm_bridge/SolScriptHost.cs'
             if not bridge.is_file() or not hasattr(panel,'write_button'):raise RuntimeError('SOL SDK adapter or apply control missing')
             report['sol_apply_adapter_available']=True

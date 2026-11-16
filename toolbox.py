@@ -154,7 +154,7 @@ class ToolboxWindow(QMainWindow):
             self.page_description.setText('从真实 NG 素材制作训练补充图，预览后批量导出。')
         elif index == 2:
             self.page_title.setText('脚本生成与测试')
-            self.page_description.setText('配置产品判定规则，生成 VM 脚本，并编译验证每一项输出。')
+            self.page_description.setText('打开 SOL → 选择脚本模块 → 修改规则 → 编译并应用到方案。')
         else:
             self.page_title.setText('相机参数')
             self.page_description.setText('材料尺寸 → 视野与工作距离 → 取图高度 → 编码器倍频。')
