@@ -29,7 +29,7 @@ class CameraReadbackTests(unittest.TestCase):
                 if key=='UserSetLoad':self.stale=True
             def invalidate_nodes(self):self.stale=False;self.refreshes+=1;return True
         camera=CachedCamera();report=apply_comparison(camera,compare(camera,CameraSettings()))
-        self.assertEqual(camera.refreshes,2);self.assertEqual(report['status'],'passed')
+        self.assertEqual(camera.refreshes,4);self.assertEqual(report['status'],'passed')
         self.assertEqual([r['phase'] for r in report['readbacks']],['before_save','after_reload'])
         self.assertTrue(all(r['cache_invalidated'] and r['verified'] for r in report['readbacks']))
 

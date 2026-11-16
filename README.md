@@ -1,4 +1,4 @@
-# VT STUDIO 图像工具箱 · 7.18.1
+# VT STUDIO 图像工具箱 · 7.18.2
 
 最后更新：2026-11-16
 
@@ -8,9 +8,9 @@
 
 ## 打开工具
 
-GitHub仓库：[tienan2024/vt-studio-toolbox](https://github.com/tienan2024/vt-studio-toolbox)。6.5使用矩形XML；7.18.1包含多边形XML、脚本生成/测试、SOL应用和相机参数，发布版本以Release版本号为准。直接使用请从 [Releases](https://github.com/tienan2024/vt-studio-toolbox/releases) 下载Windows便携包，解压后运行VTStudioToolbox.exe；VTStudioCLI.exe供AI与脚本调用。源码仓库包含必要的原转换核心，不包含Python环境、生产图片、本机验证目录或构建产物。
+GitHub仓库：[tienan2024/vt-studio-toolbox](https://github.com/tienan2024/vt-studio-toolbox)。6.5使用矩形XML；7.18.2包含多边形XML、脚本生成/测试、SOL应用和相机参数，发布版本以Release版本号为准。直接使用请从 [Releases](https://github.com/tienan2024/vt-studio-toolbox/releases) 下载Windows便携包，解压后运行VTStudioToolbox.exe；VTStudioCLI.exe供AI与脚本调用。源码仓库包含必要的原转换核心，不包含Python环境、生产图片、本机验证目录或构建产物。
 
-优先双击桌面“VT STUDIO 工具箱”快捷方式。7.18.1独立包位于 `D:/CodexBuilds/vt-studio-toolbox/7.18.1/VTStudioToolbox/VTStudioToolbox.exe`（源码的release/7.18.1入口通过目录联接保留），启动脚本优先打开新版，旧窗口和旧包保留。便携版需保留整个文件夹及_internal，不能只复制EXE。
+优先双击桌面“VT STUDIO 工具箱”快捷方式。7.18.2独立包位于 `D:/CodexBuilds/vt-studio-toolbox/7.18.2/VTStudioToolbox/VTStudioToolbox.exe`（源码的release/7.18.2入口通过目录联接保留），启动脚本优先打开新版，旧窗口和旧包保留。便携版需保留整个文件夹及_internal，不能只复制EXE。
 
 源码启动：
 
@@ -156,10 +156,12 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Python python
 7.4新增六款完整相机型号与固定镜头组合：2K/12mm、4K/25mm、500万面阵/6mm，黑白彩色共用对应镜头。选择后自动带入并锁定像元、传感器尺寸及焦距。快速估算保留原远距公式；专业计算支持薄透镜/主平面偏移及实测全幅视野，模型值须现场校准。更多参数→编码器中输入每圈走料长度、P/R、计数倍率、周期转数、产能及Y目标，程序自动求倍分频并显示实际采样误差；连接设备后按真实范围/步长重算，离线规划不代表设备已验证。虚拟设备需用户以管理员身份运行，未将虚拟/实体设备读写列为已验证。
 
 相机页按材料→目标视野→采样精度→实测周期走料→倍分频→图高/空档校验计算。200×400mm、横向10%、纵向2%、CL024/12mm时：视野220×408mm，快速距离184.152mm，规划精度0.107421875mm/px，材料最少3724行，建议图高3800。只有实测周期走料为429.6875mm、1000有效脉冲/周期时，才得到1/4/1、周期4000行及空档200行；该距离是计算示例，不是现场默认值。详细公式与兼容性见docs/13-相机参数.md。
-7.18.1修复数字IO预设跨列行的高度与单元格内边距适配。相机保存前和UserSet重载后刷新SDK节点缓存并记录分阶段目标/实际值；仍不一致时继续报错，实体高度持久化问题须复测。
+7.16.1修复数字IO预设跨列行的高度与单元格内边距适配。相机保存前和UserSet重载后刷新SDK节点缓存并记录分阶段目标/实际值；仍不一致时继续报错，实体高度持久化问题须复测。
 
 7.17自动发现并记住VM安装目录；每次SOL应用成功后继续编辑新副本，跨流程逐个应用可累计保留前面的修改。缺少aiResult和Label_name时补齐兼容输入并关闭AI判定。尚未点击应用的生成器编辑不会自动写入SOL。
 
 7.18在相机“配置与文件”提供“导入MFA到设备用户集1”试用入口：先备份，再用FileAccess缓冲接口导入并逐字节读回核对，匹配后发送加载并记录当前读数。仅恢复文件内容，不合入左侧计算值；实体设备及加载完成状态仍需复测，不改变原计算参数写入流程。
 
 7.18.1依据用户提供的CL024实体A/B调查，在UserSetSave后等待3秒，再加载并完整读回核验。保存/加载时序得到修正，其他机型耗时及4100完整配置仍需现场复测；MFA入口保持独立。
+
+7.18.2修复新相机来源占线导致LineMode只读：先关闭触发、准备目标输入、写入计划中的帧/行触发及编码器/频率转换器来源，再刷新权限并设置输出；失败按原Input→原来源→原输出→曝光/触发恢复。对比不提前改相机，仍只读时明确失败，不清除未计划来源。报告记录IO释放后的权限及枚举，实体相机仍需复测。

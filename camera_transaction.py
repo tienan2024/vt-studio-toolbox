@@ -12,6 +12,7 @@ from camera_options import model_identity
 # pending Save on CL024-91GM; a 3-second interval survives reload. Other models
 # still require the existing full readback verification; this is not IsDone.
 USER_SET_SAVE_DELAY_S=3.0
+IO_SOURCE_KEYS=('EncoderSourceB','EncoderSourceA','InputSource','TriggerSource')
 
 
 class CameraWriteError(CameraError):
@@ -55,7 +56,7 @@ def selectors(camera):
 
 
 def _dependent(entry):
-    return bool(entry['selectors']) or entry['key'] in ('ExposureMode','ExposureAuto','GainAuto','ExposureTime','Gain','DigitalShift','BlackLevel')
+    return bool(entry['selectors']) or entry['key'] in IO_SOURCE_KEYS+('ExposureMode','ExposureAuto','GainAuto','ExposureTime','Gain','DigitalShift','BlackLevel')
 
 
 def entry_label(entry):
@@ -76,7 +77,7 @@ def validate_value(entry,cap,geometry):
     elif kind=='bool' and type(value) is not bool:raise CameraError(key+'需要布尔值。')
     if not cap['writable'] and not same(cap['value'],value):
         raise CameraError(entry_label(entry)+'当前只读（当前 '+str(cap['value'])+'，目标 '+str(value)+'）。'+
-            ('请核对帧/行触发是否已关闭；若关闭后仍只读，请检查该线路是否固定方向或设备仍在采集。' if key=='LineMode' else ''))
+            ('请检查帧/行触发、编码器及频率转换器信号源是否仍占用该线路，或线路是否固定方向、设备是否仍在采集。' if key=='LineMode' else ''))
 
 
 def observe_trigger_state(camera,frame_selector='FrameBurstStart',line=True):
@@ -131,9 +132,11 @@ def compare(camera,settings):
             row={'entry':entry,'before':None,'capability':None,'status':'待校验','error':''}
             try:
                 select.select(entry['selectors']);cap=camera.read(entry['key'],entry['kind']);row['before']=cap['value'];row['capability']=cap
-                if not cap['writable'] and not same(cap['value'],entry['value']) and _dependent(entry):
+                input_dependency=(entry['key'] in IO_SOURCE_KEYS and cap['kind']=='enum' and entry['value'] not in cap['choices'] and
+                    any(n['key']=='LineMode' and n['value']=='Input' and n['selectors'].get('LineSelector')==entry['value'] for n in plan['nodes']))
+                if input_dependency or (not cap['writable'] and not same(cap['value'],entry['value']) and _dependent(entry)):
                     if entry['key']=='LineMode':
-                        row['detail']='关闭帧/行触发后校验并修改线路模式'
+                        row['detail']='关闭帧/行触发并更新信号源后，重新读取权限并修改线路模式'
                     row['status']='依赖模式切换后校验'
                 else:
                     validate_value(entry,cap,geometry);row['status']='保持' if same(cap['value'],entry['value']) else '修改'
@@ -238,7 +241,7 @@ def apply_comparison(camera,preview,progress=None):
     if not current['ready']:raise CameraError('相机当前状态不满足写入：'+'；'.join(current['errors']))
     if fingerprint(current['plan'])!=fingerprint(preview['plan']):raise CameraError('设备范围或计算计划已变化，请重新对比。')
     def stable_values(rows):
-        return [(None if r['status']=='依赖模式切换后校验' and r['entry']['key']!='LineMode' else r['before'],r['status']) for r in rows]
+        return [(None if r['status']=='依赖模式切换后校验' and r['entry']['key'] not in IO_SOURCE_KEYS+('LineMode',) else r['before'],r['status']) for r in rows]
     if stable_values(current['rows'])!=stable_values(preview['rows']):raise CameraError('相机参数在对比后已被修改，请重新对比。')
     if current['persistence']!=preview['persistence']:raise CameraError('用户集状态已变化，请重新对比。')
     if _stable_observations(current['observed_trigger_state'])!=_stable_observations(preview.get('observed_trigger_state',[])):
@@ -255,6 +258,11 @@ def apply_comparison(camera,preview,progress=None):
             report['before'].append({'node':entry,'value':row['before'],'kind':row['capability']['kind'],'phase':'before_write'})
     unknown_before=[r['entry']['key'] for r in current['rows'] if r['status']=='依赖模式切换后校验' and r['before'] is None]
     with selectors(camera) as select:
+        def refresh_io(phase):
+            refresh=getattr(camera,'invalidate_nodes',None)
+            result={'phase':phase,'cache_invalidated':bool(refresh()) if callable(refresh) else False}
+            report.setdefault('io_preparation',{'refreshes':[],'lines':[]})['refreshes'].append(result)
+            event('camera.transaction','io_node_refresh',**result)
         def remember(entry,cap):
             ident=node_id(entry)
             if ident not in originals:
@@ -305,10 +313,34 @@ def apply_comparison(camera,preview,progress=None):
             triggers=[r['entry'] for r in rows if r['entry']['key']=='TriggerMode']
             for entry in triggers:write(entry,'Off')
             event('camera.transaction','triggers_disabled',device=camera.device,selectors=[e['selectors'] for e in triggers])
+            refresh_io('after_triggers_off')
+            # Off alone does not free a line still selected by a source bank.
+            # First make target input lines usable, then move the planned sources
+            # away from target outputs before querying their access/enum again.
+            prepared=set()
+            for row in rows:
+                entry=row['entry']
+                if entry['key']=='LineMode' and entry['value']=='Input':
+                    write(entry);prepared.add(node_id(entry))
+            notify('正在更新帧/行触发及编码器信号源，重新读取IO权限…')
+            for key in IO_SOURCE_KEYS:
+                for row in rows:
+                    entry=row['entry']
+                    if entry['key']==key:write(entry);prepared.add(node_id(entry))
+            refresh_io('after_sources_updated')
+            for row in rows:
+                entry=row['entry']
+                if entry['key']!='LineMode':continue
+                select.select(entry['selectors']);cap=camera.read('LineMode','enum')
+                result={'node':entry,'capability':cap}
+                report['io_preparation']['lines'].append(result)
+                event('camera.transaction','io_access_after_sources',**result)
+                validate_value(entry,cap,current['geometry'])
             for key in ('OffsetX','OffsetY'):
                 row=next((r for r in rows if r['entry']['key']==key),None)
                 if row:write(row['entry'],row['capability'].get('min',0))
-            for row in _ordered(rows):write(row['entry'])
+            for row in _ordered(rows):
+                if node_id(row['entry']) not in prepared:write(row['entry'])
             verify_all('before_save');report['observed_before_save']=_verify_capacity(camera,settings);select.restore();select.original.clear()
             notify('运行参数已读回，正在保存 UserSet1…')
             camera.write('UserSetSelector','enum','UserSet1');persist_started=True;report['persistent_may_have_changed']=True
@@ -330,6 +362,7 @@ def apply_comparison(camera,preview,progress=None):
             if not persist_started:
                 try:
                     for entry in [r['entry'] for r in current['rows'] if r['entry']['key']=='TriggerMode']:write(entry,'Off')
+                    refresh_io('rollback_triggers_off')
                     for key in ('OffsetX','OffsetY'):
                         saved=next((v for v in originals.values() if v[0]['key']==key),None)
                         if saved:
@@ -342,10 +375,11 @@ def apply_comparison(camera,preview,progress=None):
                     if key=='PixelFormat':return 0
                     if key in ('Width','Height'):return 10
                     if key in ('OffsetX','OffsetY'):return 20
-                    # Restore the IO bank while both trigger banks are still Off.
-                    # Exposure restoration below may require re-enabling LineStart.
-                    if key=='LineMode':return 25
-                    if row[0]['selectors'].get('LineSelector'):return 26
+                    # Restore original inputs before sources can claim them,
+                    # and free original outputs before restoring their mode.
+                    if key=='LineMode':return 25 if row[1]=='Input' else 27
+                    if key in IO_SOURCE_KEYS:return 26
+                    if row[0]['selectors'].get('LineSelector'):return 28
                     if key=='ExposureMode':return 30
                     if key=='ExposureAuto':return 31
                     if key=='ExposureTime':return 32
@@ -354,8 +388,11 @@ def apply_comparison(camera,preview,progress=None):
                     if key=='TriggerMode':return 100
                     return 30
                 restore_rows.sort(key=restore_priority)
+                io_refreshed=False
                 for entry,value,kind in restore_rows:
                     try:
+                        if restore_priority((entry,value,kind))>=27 and not io_refreshed:
+                            refresh_io('rollback_sources_restored');io_refreshed=True
                         if settings.kind=='line' and entry['key'] in ('ExposureMode','ExposureAuto','ExposureTime'):
                             select.select({'TriggerSelector':'LineStart'})
                             if camera.read('TriggerMode','enum')['value']!='On':camera.write('TriggerMode','enum','On')
