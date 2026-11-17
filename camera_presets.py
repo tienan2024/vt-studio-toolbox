@@ -12,7 +12,7 @@ SCHEMA='vt-camera-page-presets/2'
 PAGE_KEYS={
     'material':('kind','camera_model_id','sensor_width','sensor_height','pixel_pitch_um','focal_length_mm','optics_method','working_distance_mm','principal_plane_offset_mm','framing_source','precision_source','horizontal_margin_percent','vertical_margin_percent','target_width_mm','target_length_mm','image_horizontal_margin_mm','image_vertical_margin_mm'),
     'encoder':('auto_frequency','cycle_travel_mm','ppr','edge_factor','encoder_revs','height_override','cycle_idle_lines','pre_divider','multiplier','post_divider'),
-    'trigger':('frame_line','frame_selector','line_source','encoder_line'),
+    'trigger':('frame_line','frame_selector','line_source','encoder_line','encoder_source_b','encoder_output_mode','encoder_counter_mode','converter_input_source','converter_alignment'),
     'io':('frame_edge','line_edge','input_format','a_debounce_ns','z_debounce_ns','output0_enabled','output0_line','output0_source','output4_enabled','output4_line','output4_source','output_mode','strobe_enable','strobe_duration_us'),
     'calibration':('optics_direction','fov_width_mm','fov_height_mm','x_mm_per_px','line_y_source','y_mm_per_px','calibration_length_mm','calibration_rows','encoder_travel_mm_per_rev','frequency_tolerance_percent','frequency_strategy','height_rounding'),
     'imaging':('device_name','products_per_minute','exposure_us','gain','compression','digital_shift','preamp_gain','pixel_format','reverse_x','black_level','width_override','centered_x','offset_x','offset_y','line_rate_override','limit_line_rate','require_square','square_tolerance_percent'),
@@ -34,7 +34,7 @@ def defaults(model):
     values={
         'material':{key:preset[key] for key in ('kind','sensor_width','sensor_height','pixel_pitch_um','focal_length_mm')},
         'encoder':dict(auto_frequency=True,height_override=0,pre_divider=1,multiplier=1,post_divider=1) if line else {},
-        'trigger':dict(frame_line='Line3',frame_selector='FrameBurstStart',line_source='FrequencyConverter',encoder_line='Line1') if line else dict(frame_line='Line0',frame_selector='FrameStart'),
+        'trigger':dict(frame_line='Line3',frame_selector='FrameBurstStart',line_source='FrequencyConverter',encoder_line='Line1',encoder_source_b='NA',encoder_output_mode='AnyDirection',encoder_counter_mode='IgnoreDirection',converter_input_source='EncoderModuleOut',converter_alignment='FallingEdge') if line else dict(frame_line='Line0',frame_selector='FrameStart'),
         'io':dict(frame_edge='RisingEdge',line_edge='FallingEdge',input_format='Differential',a_debounce_ns=300,z_debounce_ns=1000,output0_enabled=True,output0_line='Line0',output0_source='ExposureStartActive',output4_enabled=True,output4_line='Line4',output4_source='SoftTriggerActive',output_mode='Strobe',strobe_enable=True,strobe_duration_us=25000),
         'calibration':dict(frequency_tolerance_percent=15,frequency_strategy='cycle',height_rounding=100),
         'imaging':dict(width_override=0,offset_x=0,offset_y=0,centered_x=True,pixel_format='' if preset['color'] else 'Mono8',reverse_x=False,exposure_us=19,gain=0,preamp_gain='',digital_shift=-1,black_level=-1,compression='',line_rate_override=0,limit_line_rate=False),

@@ -223,5 +223,6 @@ class ToolboxWindow(QMainWindow):
                 self.camera.notify('相机操作正在执行，请等待完成后再关闭窗口。',True)
             event.ignore()
         else:
+            self.script.variables.clear_session_password()
             if hasattr(self,'diagnostic_dialog'):self.diagnostic_dialog.close()
             event.accept()

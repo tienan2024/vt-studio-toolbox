@@ -13,7 +13,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 
-from script_generator import validate_config,generate_sources,variable_rows,port_name,compiler_path
+from script_generator import validate_config,generate_sources,variable_rows,port_name,compiler_path,FIXED_INPUTS
 from sol_reader import read_sol_parts,sol_metadata,frame_records,SolError
 
 
@@ -105,10 +105,10 @@ def plan_application(config,module):
     if not module or not str(module.get('id','')).isdigit():raise SolApplyError('请先选择 SOL 中的脚本模块。')
     c=config_for_module(config,module);rows=variable_rows(c)
     additions=[];preserved=[]
-    optional={port_name(c,n) for n in ('aiResult','Label_name')} if not c['use_ai'] else set()
+    fixed_inputs={port_name(c,n) for n,_ in FIXED_INPUTS}
     for key,direction in (('inputs','输入'),('outputs','输出')):
         existing={r['name']:r for r in module[key]};expected={r['name']:r for r in rows if r['direction']==direction}
-        if key=='outputs' and existing and set(existing)!=set(expected):
+        if key=='outputs' and set(existing)-set(expected):
             raise SolApplyError('输出名称与目标模块不一致，会影响下游绑定。请按 SOL 原输出名修改变量清单后再应用。')
         for name,row in expected.items():
             if name in existing:
@@ -116,7 +116,7 @@ def plan_application(config,module):
                     raise SolApplyError('目标变量类型不一致：'+name)
                 preserved.append({'direction':direction,'name':name,'type':row['type']})
             else:
-                if key=='inputs' and name not in optional:
+                if key=='inputs' and name not in fixed_inputs:
                     raise SolApplyError('缺少必需输入 '+name+'，无法猜测其上游绑定。请先使用此模块变量或在VM建立正确绑定。')
                 additions.append({'direction':direction,'name':name,'type':row['type']})
     return {'module_id':module['id'],'flow':module['flow'],'module':module['name'],
@@ -164,15 +164,121 @@ def replace_native_record(original,native,ident):
     return frame
 
 
+def _zip_container(path):
+    """Single-volume ZIP directory and opaque local records; never decrypt data."""
+    if Path(path).stat().st_size>2_000_000_000:raise SolApplyError('SOL文件超过2GB更新限制。')
+    with zipfile.ZipFile(path) as archive,Path(path).open('rb') as stream:
+        infos=archive.infolist()
+        if not infos or len(infos)>30000:raise SolApplyError('方案ZIP条目数量无效。')
+        offsets=sorted(e.header_offset for e in infos)+[archive.start_dir]
+        if (offsets[0]!=0 or len(set(offsets))!=len(offsets) or
+                any(not 0<=e.header_offset<archive.start_dir for e in infos)):
+            raise SolApplyError('不支持此方案ZIP头边界。')
+        stream.seek(archive.start_dir);records={};central_size=0
+        for entry in infos:
+            header=stream.read(46)
+            if len(header)!=46 or header[:4]!=b'PK\x01\x02':raise SolApplyError('方案ZIP目录结构无效。')
+            name_len,extra_len,comment_len=struct.unpack_from('<HHH',header,28)
+            if struct.unpack_from('<H',header,34)[0] or struct.unpack_from('<I',header,42)[0]==0xffffffff:
+                raise SolApplyError('暂不支持分卷或ZIP64目录的方案更新。')
+            tail=stream.read(name_len+extra_len+comment_len)
+            if len(tail)!=name_len+extra_len+comment_len:raise SolApplyError('方案ZIP目录被截断。')
+            encoding='utf-8' if entry.flag_bits&0x800 else 'cp437'
+            if tail[:name_len]!=entry.orig_filename.encode(encoding):raise SolApplyError('方案ZIP条目名不一致。')
+            name=entry.filename.replace('\\','/')
+            if name in records:raise SolApplyError('封装方案包含重复条目。')
+            records[name]={'info':entry,'central':header+tail,'start':entry.header_offset,
+                           'length':next(n for n in offsets if n>entry.header_offset)-entry.header_offset}
+            central_size+=len(header)+len(tail)
+        end=stream.read(22)
+        if len(end)!=22 or end[:4]!=b'PK\x05\x06':raise SolApplyError('暂不支持ZIP64或扩展目录的方案更新。')
+        disk,directory_disk,disk_count,total_count,size,offset,comment_len=struct.unpack_from('<4H2IH',end,4)
+        if (disk or directory_disk or disk_count!=len(infos) or total_count!=len(infos) or
+                size!=central_size or offset!=archive.start_dir or stream.read(comment_len)!=archive.comment or stream.read(1)):
+            raise SolApplyError('方案ZIP结束记录不一致。')
+        for record in records.values():
+            stream.seek(record['start']);header=stream.read(30)
+            if len(header)!=30 or header[:4]!=b'PK\x03\x04':raise SolApplyError('方案ZIP局部头无效。')
+            name_len,extra_len=struct.unpack_from('<HH',header,26)
+            central=record['central'];central_name_len=struct.unpack_from('<H',central,28)[0]
+            if stream.read(name_len)!=central[46:46+central_name_len]:raise SolApplyError('方案ZIP局部条目名与目录不一致。')
+            if 30+name_len+extra_len+record['info'].compress_size>record['length']:
+                raise SolApplyError('方案ZIP压缩块越界。')
+        return records,archive.comment
+
+
+def preserve_archive_container(source,updated,output):
+    """Use the SDK-updated frame, but copy every other ZIP record byte-for-byte.
+
+    SharpZipLib updates retain compressed data but normalize DOS dates and ZIP
+    headers. VM source files can use non-calendar DOS dates. Keep those opaque
+    headers as well; only central-directory local offsets need relocation.
+    """
+    before,comment=_zip_container(source);after,_=_zip_container(updated)
+    target='SolutionFile/MoudleFrame'
+    if set(before)!=set(after) or target not in before:raise SolApplyError('原生封装后的方案条目不完整。')
+    output=Path(output);created=False
+    try:
+        with Path(source).open('rb') as original,Path(updated).open('rb') as native,output.open('xb') as stream:
+            created=True;directory=[]
+            for name,old in before.items():
+                record=after[name] if name==target else old;incoming=native if name==target else original
+                offset=stream.tell()
+                if offset>=0xffffffff:raise SolApplyError('方案ZIP位置超出安全更新范围。')
+                incoming.seek(record['start']);remaining=record['length']
+                while remaining:
+                    block=incoming.read(min(remaining,1024*1024))
+                    if not block:raise SolApplyError('方案ZIP条目被截断。')
+                    stream.write(block);remaining-=len(block)
+                header=record['central'];directory.append(header[:42]+struct.pack('<I',offset)+header[46:])
+            start=stream.tell()
+            for header in directory:stream.write(header)
+            size=stream.tell()-start
+            if max(start,size)>=0xffffffff:raise SolApplyError('方案ZIP目录超出安全更新范围。')
+            stream.write(struct.pack('<4s4H2IH',b'PK\x05\x06',0,0,len(directory),len(directory),size,start,len(comment)))
+            stream.write(comment)
+    except Exception:
+        if created:output.unlink(missing_ok=True)
+        raise
+
+
 def verify_archive_payloads(source,output):
     def entries(path):
+        records,comment=_zip_container(path)
         with zipfile.ZipFile(path) as archive:
-            return {e.filename.replace('\\','/'):(e.CRC,e.file_size,bool(e.flag_bits&1)) for e in archive.infolist()}
-    before,after=entries(source),entries(output)
+            infos=archive.infolist()
+            result={};metadata={}
+            with Path(path).open('rb') as stream:
+                for entry in infos:
+                    name=entry.filename.replace('\\','/')
+                    if name in result:raise SolApplyError('封装方案包含重复条目。')
+                    record=records[name]
+                    stream.seek(entry.header_offset);remaining=record['length'];digest=hashlib.sha256()
+                    while remaining:
+                        block=stream.read(min(remaining,1024*1024))
+                        if not block:raise SolApplyError('方案ZIP条目被截断。')
+                        digest.update(block);remaining-=len(block)
+                    result[name]=(entry.CRC,entry.file_size,bool(entry.flag_bits&1))
+                    metadata[name]=(entry.filename,entry.compress_type,entry.flag_bits,entry.date_time,entry.extra,entry.comment,
+                                    entry.create_system,entry.create_version,entry.extract_version,entry.reserved,
+                                    entry.internal_attr,entry.external_attr,entry.compress_size,digest.hexdigest(),
+                                    record['central'][:42]+record['central'][46:])
+            return result,metadata,comment,[e.filename for e in infos]
+    before,before_meta,before_comment,before_order=entries(source)
+    after,after_meta,after_comment,after_order=entries(output)
     if set(before)!=set(after):raise SolApplyError('封装后的方案条目不完整。')
+    if before_comment!=after_comment or before_order!=after_order:raise SolApplyError('封装后的ZIP注释或条目顺序发生变化。')
     if any(before[n]!=after[n] for n in before if n!='SolutionFile/MoudleFrame'):
         raise SolApplyError('封装后的非模块文件或密码保护状态发生变化。')
+    if any(before_meta[n]!=after_meta[n] for n in before if n!='SolutionFile/MoudleFrame'):
+        raise SolApplyError('封装后的非目标ZIP头、压缩块或容器格式发生变化，未交付该副本。')
     if before['SolutionFile/MoudleFrame'][2]!=after['SolutionFile/MoudleFrame'][2]:raise SolApplyError('方案密码保护状态发生变化。')
+    target='SolutionFile/MoudleFrame'
+    # This entry changes by design, but a ZIP2.0 source must not be silently
+    # promoted to ZIP64. Native and GUI readers need not share a ZIP decoder.
+    if before_meta[target][8]<45 and after_meta[target][8]>=45:
+        raise SolApplyError('封装将原ZIP2.0模块帧升级为ZIP64，未交付该副本。')
+    return {'non_target_archive_raw_preserved':True,'preserved_zip_entries':len(before)-1}
 
 
 def compile_host(apps,work):
@@ -254,11 +360,12 @@ def _apply_script(path,module_id,config,output,password=None,applications=None,p
             # complete native target record and retain every other original payload.
             (work/'frame.bin').write_bytes(replace_native_record(original,saved,module_id))
             notify('正在保留原方案其他模块并封装副本…')
-            request.update(input=str(staging),output=str(work/'packaged.sol'),frame=str(work/'frame.bin'),action='package')
+            request.update(input=str(staging),output=str(work/'native-package.sol'),frame=str(work/'frame.bin'),action='package')
             _host(executable,request)
+            preserve_archive_container(staging,work/'native-package.sol',work/'packaged.sol')
             packaged=read_sol_parts(work/'packaged.sol',password)
             verification=verify_saved(original,packaged,module_id,source)
-            verify_archive_payloads(staging,work/'packaged.sol')
+            verification.update(verify_archive_payloads(staging,work/'packaged.sol'))
             notify('正在独立重载并核对保存结果…')
             request.update(input=str(work/'packaged.sol'),output=str(work/'reloaded.sol'),action='verify')
             _host(executable,request)

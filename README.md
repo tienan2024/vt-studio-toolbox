@@ -1,6 +1,6 @@
-# VT STUDIO 图像工具箱 · 7.18.2
+# VT STUDIO 图像工具箱 · 7.18.3
 
-最后更新：2026-11-16
+最后更新：2026-11-17
 
 一个窗口整合 **尺寸与原点**、**缺陷合成**、**VM脚本生成/测试** 与 **相机参数**。统一导航、预览和导出，模块切换保留状态。无需账号、GPU 或网络服务。
 
@@ -8,9 +8,9 @@
 
 ## 打开工具
 
-GitHub仓库：[tienan2024/vt-studio-toolbox](https://github.com/tienan2024/vt-studio-toolbox)。6.5使用矩形XML；7.18.2包含多边形XML、脚本生成/测试、SOL应用和相机参数，发布版本以Release版本号为准。直接使用请从 [Releases](https://github.com/tienan2024/vt-studio-toolbox/releases) 下载Windows便携包，解压后运行VTStudioToolbox.exe；VTStudioCLI.exe供AI与脚本调用。源码仓库包含必要的原转换核心，不包含Python环境、生产图片、本机验证目录或构建产物。
+GitHub仓库：[tienan2024/vt-studio-toolbox](https://github.com/tienan2024/vt-studio-toolbox)。6.5使用矩形XML；7.18.3包含多边形XML、脚本生成/测试、SOL应用和相机参数，发布版本以Release版本号为准。直接使用请从 [Releases](https://github.com/tienan2024/vt-studio-toolbox/releases) 下载Windows便携包，解压后运行VTStudioToolbox.exe；VTStudioCLI.exe供AI与脚本调用。源码仓库包含必要的原转换核心，不包含Python环境、生产图片、本机验证目录或构建产物。
 
-优先双击桌面“VT STUDIO 工具箱”快捷方式。7.18.2独立包位于 `D:/CodexBuilds/vt-studio-toolbox/7.18.2/VTStudioToolbox/VTStudioToolbox.exe`（源码的release/7.18.2入口通过目录联接保留），启动脚本优先打开新版，旧窗口和旧包保留。便携版需保留整个文件夹及_internal，不能只复制EXE。
+优先双击桌面“VT STUDIO 工具箱”快捷方式。7.18.3便携包位于源码目录的 release/7.18.3/VTStudioToolbox，启动脚本优先打开新版，旧窗口和旧包保留。便携版需保留整个文件夹及_internal，不能只复制EXE。
 
 源码启动：
 
@@ -139,7 +139,7 @@ python -m pip install -r requirements-build.txt -i https://pypi.tuna.tsinghua.ed
 powershell -ExecutionPolicy Bypass -File build.ps1 -Python python
 ```
 
-运行 `build.ps1` 打包为便携目录。UI 测试会创建清楚标记的测试图像与截图，均在被 Git 忽略的 `verification/` 内。
+运行 `build.ps1` 打包为便携目录。可用 -VerificationPath 指定构建检查报告目录（默认 verification）；受限或隔离构建可指定 outputs 下的本机目录。UI 测试会创建清楚标记的测试图像与截图，均在被 Git 忽略的 `verification/` 内。
 
 构建脚本会将 Qt wheel 配套的 VC 运行库放入便携程序的私有目录，避免旧 Python 运行库与新 Qt 混用；不修改系统目录或系统运行库。
 
@@ -165,3 +165,9 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Python python
 7.18.1依据用户提供的CL024实体A/B调查，在UserSetSave后等待3秒，再加载并完整读回核验。保存/加载时序得到修正，其他机型耗时及4100完整配置仍需现场复测；MFA入口保持独立。
 
 7.18.2修复新相机来源占线导致LineMode只读：先关闭触发、准备目标输入、写入计划中的帧/行触发及编码器/频率转换器来源，再刷新权限并设置输出；失败按原Input→原来源→原输出→曝光/触发恢复。对比不提前改相机，仍只读时明确失败，不清除未计划来源。报告记录IO释放后的权限及枚举，实体相机仍需复测。
+
+7.18.3预设对比只列有相机读回来源的设备项，工位输入仍在设置和计算中使用；密码在当前SOL及成功生成的副本会话内复用，关闭软件或打开其他方案后清除。应用脚本时补齐缺失固定输入和标准输出，并修正新端口的原生注册；新增上游绑定仍需在VM配置，未知额外输出及同名异类型继续拒绝。
+
+采集触发页同版补齐编码器B相、输出/计数方向和分频器输入源、信号对准沿；设备枚举、预设、MFS、比较与最终写入读回保持一致。对准沿可独立于行触发沿，旧文件保留原缺省行为。软件计数倍率仍须按真实输入链核对，不伪装成硬件沿配置。
+
+SOL封装改为仅采用原生更新后的模块帧，其他原始ZIP记录连文件头和压缩块一并保留，交付前严格检查，见docs/12。配对方案只读核对显示只有目标脚本记录改变；曾出现的整体容器格式变化已消除，未猜改流程坐标。请从原始SOL重新应用，VM实际画布显示仍需现场打开确认。

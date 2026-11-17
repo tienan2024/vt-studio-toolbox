@@ -66,8 +66,13 @@ class CameraSettings:
     frame_line:str='Line3'
     frame_edge:str='RisingEdge'
     encoder_line:str='Line1'
+    encoder_source_b:str='NA'
+    encoder_output_mode:str='AnyDirection'
+    encoder_counter_mode:str='IgnoreDirection'
     line_source:str='FrequencyConverter'
     line_edge:str='FallingEdge'
+    converter_input_source:str='EncoderModuleOut'
+    converter_alignment:str=''
     input_format:str='Differential'
     a_debounce_ns:int=300
     z_debounce_ns:int=1000
@@ -132,9 +137,11 @@ class CameraSettings:
             if getattr(self,name)<0:raise CameraError(name+' 不能为负数。')
         if self.digital_shift < -1 or self.black_level < -1:raise CameraError('未设置增益/黑电平用-1，设置值不能为负。')
         if self.frame_selector not in ('FrameStart','FrameBurstStart') or self.frame_edge not in ('RisingEdge','FallingEdge') or self.line_edge not in ('RisingEdge','FallingEdge'):raise CameraError('触发选择器或边沿无效。')
-        line_input=self.encoder_line if self.line_source in ('FrequencyConverter','EncoderModuleOut') else self.line_source if re.fullmatch(r'Line\d+',self.line_source) else None
+        if self.converter_alignment not in ('','RisingEdge','FallingEdge'):raise CameraError('分频器信号对准沿无效。')
+        if not self.encoder_output_mode or not self.encoder_counter_mode or not self.converter_input_source:raise CameraError('编码器模式及分频器输入源不能为空。')
+        if self.encoder_source_b!='NA' and not re.fullmatch(r'Line\d{1,2}',self.encoder_source_b):raise CameraError('编码器B相须为有效Line或NA。')
         if not self.line_source or len(self.line_source)>128:raise CameraError('行触发源不能为空或过长。')
-        used=[self.frame_line]+([line_input] if self.kind=='line' and line_input else [])
+        used=[self.frame_line]+(line_inputs(self) if self.kind=='line' else [])
         if self.output0_enabled:used.append(self.output0_line)
         if self.output4_enabled:used.append(self.output4_line)
         if any(not re.fullmatch(r'Line\d{1,2}',line) for line in used) or len(used)!=len(set(used)):raise CameraError('帧、编码器和输出IO须使用不同的有效Line。')
@@ -143,6 +150,16 @@ class CameraSettings:
 
 
 def config_dict(settings):return {'schema':SCHEMA,**asdict(settings)}
+
+
+def uses_encoder(settings):
+    return settings.line_source=='EncoderModuleOut' or (settings.line_source=='FrequencyConverter' and settings.converter_input_source=='EncoderModuleOut')
+
+
+def line_inputs(settings):
+    if uses_encoder(settings):return [settings.encoder_line]+([] if settings.encoder_source_b=='NA' else [settings.encoder_source_b])
+    source=settings.converter_input_source if settings.line_source=='FrequencyConverter' else settings.line_source
+    return [source] if re.fullmatch(r'Line\d+',source) else []
 
 
 def workflow_settings():
@@ -222,6 +239,7 @@ def calculate(settings,limits=None):
     if s.framing_source=='distance':target_fov_w=fov_x
     cycle=s.kind=='line' and s.frequency_strategy=='cycle'
     converter=s.line_source=='FrequencyConverter'
+    if s.kind=='line' and converter and s.converter_input_source=='NA':blocking.append('分频器输入源为NA，不能生成有效行触发。')
     cycle_calibrated=cycle and converter and s.cycle_travel_mm>0
     cycle_pending=cycle and s.auto_frequency and not cycle_calibrated
     counts=s.ppr*s.edge_factor*s.encoder_revs if s.kind=='line' else None
@@ -321,18 +339,17 @@ def calculate(settings,limits=None):
     if s.device_name:entries.append(node('DeviceUserID','string',s.device_name))
     frame={'TriggerSelector':s.frame_selector}
     entries.extend([node('TriggerSource','enum',s.frame_line,frame),node('TriggerActivation','enum',s.frame_edge,frame),node('TriggerMode','enum','On',frame)])
-    line_input=s.encoder_line if s.line_source in ('FrequencyConverter','EncoderModuleOut') else s.line_source if re.fullmatch(r'Line\d+',s.line_source) else None
-    for line,debounce in [(s.frame_line,s.z_debounce_ns)]+([(line_input,s.a_debounce_ns)] if s.kind=='line' and line_input else []):
+    for line,debounce in [(s.frame_line,s.z_debounce_ns)]+([(v,s.a_debounce_ns) for v in line_inputs(s)] if s.kind=='line' else []):
         context={'LineSelector':line};entries.append(node('LineMode','enum','Input',context))
         if s.input_format:entries.append(node('LineFormat','enum',s.input_format,context))
         entries.append(node('LineDebouncerTimeNs','int',debounce,context))
     if s.kind=='line':
         tdi=node('TDIMode','enum','Line_1');tdi['optional']=True;entries.append(tdi)
-        if s.line_source in ('FrequencyConverter','EncoderModuleOut'):entries.extend([node('EncoderSourceA','enum',s.encoder_line),node('EncoderSourceB','enum','NA'),
-            node('EncoderOutputMode','enum','AnyDirection'),node('EncoderCounterMode','enum','IgnoreDirection'),
+        if uses_encoder(s):entries.extend([node('EncoderSourceA','enum',s.encoder_line),node('EncoderSourceB','enum',s.encoder_source_b),
+            node('EncoderOutputMode','enum',s.encoder_output_mode),node('EncoderCounterMode','enum',s.encoder_counter_mode),
             ])
         entries.append(node('AcquisitionLineRateEnable','bool',s.limit_line_rate))
-        if converter:entries.extend([node('InputSource','enum','EncoderModuleOut'),node('SignalAlignment','enum',s.line_edge)])
+        if converter:entries.extend([node('InputSource','enum',s.converter_input_source),node('SignalAlignment','enum',s.converter_alignment or s.line_edge)])
         if converter and not cycle_pending:entries.extend([node('PreDivider','int',s.pre_divider),node('Multiplier','int',s.multiplier),node('PostDivider','int',s.post_divider)])
         if s.limit_line_rate and rate is not None:entries.append(node('AcquisitionLineRate','int',int(rate)))
         context={'TriggerSelector':'LineStart'}
@@ -393,7 +410,9 @@ def import_mfs_text(text,current=None):
         'OffsetY':('offset_y',int),'ExposureTime':('exposure_us',float),'Gain':('gain',float),
         'PreDivider':('pre_divider',int),'Multiplier':('multiplier',int),'PostDivider':('post_divider',int),
         'PixelFormat':('pixel_format',str),'ImageCompressionMode':('compression',str),'DeviceUserID':('device_name',str),
-        'AcquisitionLineRate':('line_rate_override',float),'PreampGain':('preamp_gain',str)}
+        'AcquisitionLineRate':('line_rate_override',float),'PreampGain':('preamp_gain',str),
+        'EncoderSourceB':('encoder_source_b',str),'EncoderOutputMode':('encoder_output_mode',str),
+        'EncoderCounterMode':('encoder_counter_mode',str),'InputSource':('converter_input_source',str),'SignalAlignment':('converter_alignment',str)}
     try:
         for key,(field,convert) in mapping.items():
             if key in plain:setattr(settings,field,convert(plain[key]))

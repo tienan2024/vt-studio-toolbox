@@ -1,4 +1,4 @@
-param([string]$Python = "python", [string]$DistPath = "release", [string]$WorkPath = "build")
+param([string]$Python = "python", [string]$DistPath = "release", [string]$WorkPath = "build", [string]$VerificationPath = "verification")
 $ErrorActionPreference = "Stop"
 Set-Location -LiteralPath $PSScriptRoot
 $vtDistFolder = if ([IO.Path]::IsPathRooted($DistPath)) { [IO.Path]::GetFullPath($DistPath) } else { [IO.Path]::GetFullPath((Join-Path $PSScriptRoot $DistPath)) }
@@ -21,7 +21,7 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'examples') -Destination $vtPort
 $vtLegacyDocFolder = Join-Path $vtPortableFolder 'legacy'
 New-Item -ItemType Directory -Path $vtLegacyDocFolder -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'legacy/README.md') -Destination $vtLegacyDocFolder -Force
-$vtVerificationFolder = Join-Path $PSScriptRoot 'verification'
+$vtVerificationFolder = if ([IO.Path]::IsPathRooted($VerificationPath)) { [IO.Path]::GetFullPath($VerificationPath) } else { [IO.Path]::GetFullPath((Join-Path $PSScriptRoot $VerificationPath)) }
 New-Item -ItemType Directory -Path $vtVerificationFolder -Force | Out-Null
 $vtReportPath = Join-Path $vtVerificationFolder 'portable_smoke.json'
 '{"status":"pending"}' | Set-Content -LiteralPath $vtReportPath -Encoding UTF8

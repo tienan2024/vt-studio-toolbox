@@ -15,7 +15,7 @@ from camera_transaction import inspect_camera,preview_camera,write_camera
 from camera_options import PRESETS,FIELD_LABELS,LABELS,option_label,model_identity,model_preset
 from camera_constraints import resolve_fixed_values,within_precision
 from camera_presets import CameraPresetStore,model_key
-from camera_snapshot import compare_presets,PAGE_NAMES
+from camera_snapshot import compare_presets,device_preset_metadata,PAGE_NAMES
 
 
 def value_lock_icon(locked):
@@ -258,6 +258,13 @@ class CameraPage(QWidget):
         self.line_trigger_source.currentIndexChanged.connect(self.changed)
         line_layout.addWidget(self.line_trigger_source);trigger.addRow(self.line_trigger_group)
         self.encoder_trigger_group=self.trigger_group(trigger,'encoder_line','编码器 A 相输入','Line1')
+        inputs=[('未连接','NA')]+[('Line'+str(i),'Line'+str(i)) for i in range(5)]
+        self.combo(trigger,'encoder_source_b','编码器 B 相输入',inputs)
+        self.combo(trigger,'encoder_output_mode','编码器输出方向',[(option_label(v),v) for v in ('AnyDirection','ForwardOnly','BackwardOnly')])
+        self.combo(trigger,'encoder_counter_mode','编码器计数方向',[(option_label(v),v) for v in ('IgnoreDirection','FollowDirection','BackwardDirection')])
+        self.combo(trigger,'converter_input_source','分频器输入源',[(option_label(v),v) for v in ('EncoderModuleOut','Line0','Line1','Line2','Line3','Line4','NA')])
+        self.combo(trigger,'converter_alignment','分频器信号对准沿',[('跟随行触发边沿',''),('下降沿','FallingEdge'),('上升沿','RisingEdge')])
+        self.controls['converter_alignment'].setToolTip('接收信号与生成信号的转换/对齐关系；不是编码器计数倍率。旧配置空值沿用行触发边沿。')
         self.trigger_help=QLabel();self.trigger_help.setWordWrap(True);self.trigger_help.setObjectName('Subtle');trigger.addRow(self.trigger_help)
         self.combo(calibration,'kind','相机类型',[('线扫','line'),('面阵','area')])
         self.combo(calibration,'precision_source','精度来源',[('实测视野','fov'),('已知精度','precision'),('镜头估算','optics')])
@@ -276,8 +283,8 @@ class CameraPage(QWidget):
         self.number(calibration,'frequency_tolerance_percent','Y 采样允许误差 / %',0,100,3)
         self.controls['encoder_travel_mm_per_rev'].setToolTip('编码器轴实际旋转一圈，对应材料行进的距离；通过实测或传动机构计算，不能用产品长度代替。')
         self.integer(encoder,'ppr','编码器 P/R',1,10000000)
-        self.combo(encoder,'edge_factor','实际计数倍率',[('×1',1),('×2',2),('×4',4)])
-        self.controls['edge_factor'].setToolTip('×1示例为A相上升沿；倍率应与设备实际有效计数一致，本选项不自动改变硬件计数模式。')
+        self.combo(encoder,'edge_factor','输入有效计数倍率',[('×1',1),('×2',2),('×4',4)])
+        self.controls['edge_factor'].setToolTip('用于P/R到输入有效计数的换算，须按实际信号链核对。更改A/B相、方向或分频器输入后须重新确认；本项不写硬件倍数，信号对准沿也不等于×2/×4。')
         self.number(encoder,'encoder_revs','每帧间隔圈数',.000001,1000,6)
         self.integer(encoder,'pre_divider','预分频 PreDivider',1,5)
         self.integer(encoder,'multiplier','倍频 Multiplier',1,5)
@@ -451,12 +458,15 @@ class CameraPage(QWidget):
                for page,control in self.page_preset_controls.items()}
         current=list(PAGE_NAMES)[max(0,self.form_tabs.currentIndex())]
         rows=compare_presets(self.snapshot,pages)
-        self.preset_comparison_report={'schema':'vt-camera-preset-comparison/1','model':model,'snapshot':self.snapshot,'selected_presets':pages,'rows':rows}
+        self.preset_comparison_report={'schema':'vt-camera-preset-comparison/1','model':model,'snapshot':self.snapshot,'selected_presets':device_preset_metadata(pages,rows),'rows':rows}
         if not self.diff_scope.currentData():rows=[r for r in rows if r['page']==current]
+        has_device_parameters=bool(rows)
         differences=sum(r['status'] in ('不同','预设超范围','预设机型不匹配') for r in rows)
-        if self.diff_only.isChecked():rows=[r for r in rows if r['status'] not in ('一致','工位计算项','计算或未启用')]
+        if self.diff_only.isChecked():rows=[r for r in rows if r['status']!='一致']
         source=(model or '自定义机型')+' · '+('各页所选预设' if self.diff_scope.currentData() else PAGE_NAMES[current]+' · '+pages[current]['name'])
-        self.diff_summary.setText(source+' · '+('待读取设备' if not self.snapshot else str(differences)+' 项差异'))
+        state='待读取设备' if not self.snapshot else str(differences)+' 项差异'
+        if not has_device_parameters:state='本页无可对比的相机参数'
+        self.diff_summary.setText(source+' · '+state)
         def display(value):
             if value is None:return '—'
             if type(value) is bool:return '启用' if value else '关闭'
@@ -636,6 +646,8 @@ class CameraPage(QWidget):
         s.frame_line='Line3' if s.kind=='line' else 'Line0';s.frame_edge='RisingEdge'
         if s.kind=='line':
             s.encoder_line='Line1';s.line_edge='FallingEdge';s.input_format='Differential'
+            s.encoder_source_b='NA';s.encoder_output_mode='AnyDirection';s.encoder_counter_mode='IgnoreDirection'
+            s.converter_input_source='EncoderModuleOut';s.converter_alignment='FallingEdge'
             s.a_debounce_ns=300;s.z_debounce_ns=1000;s.pre_divider=1;s.multiplier=3;s.post_divider=1
             s.output0_enabled=True;s.output0_line='Line0';s.output0_source='ExposureStartActive'
             s.output4_enabled=False;s.output4_line='Line4';s.output4_source='SoftTriggerActive'
@@ -695,6 +707,8 @@ class CameraPage(QWidget):
                 value=widget.itemData(i)
                 if value in LABELS or value in PRESETS:widget.setItemText(i,option_label(value,self.language))
             widget.blockSignals(blocked)
+        alignment=self.controls['converter_alignment'];index=alignment.findData('')
+        if index>=0:alignment.setItemText(index,'Follow line trigger edge' if en else '跟随行触发边沿')
         names=['Material & FOV','Encoder & Height','Trigger','Digital IO','Calibration','Imaging'] if en else ['材料与视野','编码器与图高','采集触发','数字 IO','专业标定','成像']
         for i,name in enumerate(names):self.form_tabs.setTabText(i,name)
         self.optical_mode_label.setText('Calculate' if en else '计算方向')
@@ -737,6 +751,7 @@ class CameraPage(QWidget):
         if not choices:return
         widget=self.controls[key];current=widget.currentData();blocked=widget.blockSignals(True);widget.clear()
         for value in dict.fromkeys([*choices,*([current] if current is not None else [])]):widget.addItem(option_label(value,self.language),value)
+        if key=='converter_alignment' and widget.findData('')>=0:widget.setItemText(widget.findData(''),'Follow line trigger edge' if self.language=='en' else '跟随行触发边沿')
         widget.setCurrentIndex(widget.findData(current));widget.blockSignals(blocked)
 
     @staticmethod
@@ -795,7 +810,8 @@ class CameraPage(QWidget):
     def enable_fields(self):
         line=self.controls['kind'].currentData()=='line';source=self.controls['precision_source'].currentData();fov=source=='fov';optics=source=='optics'
         line_only=('auto_frequency','encoder_travel_mm_per_rev','frequency_tolerance_percent','ppr','edge_factor','encoder_revs','pre_divider','multiplier','post_divider','rate_margin_percent',
-                   'line_edge','a_debounce_ns','line_rate_override','limit_line_rate','line_y_source')
+                   'line_edge','a_debounce_ns','line_rate_override','limit_line_rate','line_y_source',
+                   'encoder_source_b','encoder_output_mode','encoder_counter_mode','converter_input_source','converter_alignment')
         for key in line_only:
             self.controls[key].setEnabled(line);self.field_forms[key].setRowVisible(self.controls[key],line)
         self.line_trigger_group.setVisible(line);self.encoder_trigger_group.setVisible(line);self.controls['encoder_line'].setEnabled(line)
@@ -811,6 +827,12 @@ class CameraPage(QWidget):
         self.controls['focal_length_mm'].setEnabled(optics and not known);self.controls['pixel_pitch_um'].setEnabled(optics and not known)
         automatic=line and self.controls['auto_frequency'].isChecked()
         converter=self.controls['line_source'].currentData()=='FrequencyConverter'
+        encoder_used=self.controls['line_source'].currentData()=='EncoderModuleOut' or (converter and self.controls['converter_input_source'].currentData()=='EncoderModuleOut')
+        self.encoder_trigger_group.setVisible(line and encoder_used);self.controls['encoder_line'].setEnabled(line and encoder_used)
+        for key in ('encoder_source_b','encoder_output_mode','encoder_counter_mode'):
+            self.field_forms[key].setRowVisible(self.controls[key],line and encoder_used);self.controls[key].setEnabled(line and encoder_used)
+        for key in ('converter_input_source','converter_alignment'):
+            self.field_forms[key].setRowVisible(self.controls[key],line and converter);self.controls[key].setEnabled(line and converter)
         self.controls['auto_frequency'].setEnabled(line and converter)
         self.controls['encoder_travel_mm_per_rev'].setEnabled(automatic)
         for key in ('pre_divider','multiplier','post_divider'):self.controls[key].setEnabled(line and converter and not automatic)
@@ -829,9 +851,17 @@ class CameraPage(QWidget):
         for prefix in ('output0','output4'):
             for suffix in ('line','source'):self.controls[prefix+'_'+suffix].setEnabled(self.controls[prefix+'_enabled'].isChecked())
         self.controls['strobe_duration_us'].setEnabled(self.controls['output4_enabled'].isChecked())
-        self.trigger_help.setText(('Frame trigger only.' if self.language=='en' else '面阵仅使用帧触发。') if not line else ('Encoder A → FrequencyConverter → LineStart.' if self.language=='en' else '编码器 A 相 → 频率转换器 → 行触发。'))
-        if line and self.controls['line_source'].currentData()!='FrequencyConverter':
-            self.trigger_help.setText(str(self.controls['line_source'].currentData())+(' → LineStart; verify this source timing.' if self.language=='en' else ' → 行触发；按此信号源核对行节拍。'))
+        en=self.language=='en'
+        if not line:self.trigger_help.setText('Frame trigger only.' if en else '面阵仅使用帧触发。')
+        else:
+            def source_text(source):
+                if source!='EncoderModuleOut':return option_label(source,self.language)
+                text=('Encoder A (' if en else '编码器 A 相（')+str(self.controls['encoder_line'].currentData())+(')' if en else '）')
+                b=self.controls['encoder_source_b'].currentData()
+                return text+(' + B ('+str(b)+')' if en else ' + B 相（'+str(b)+'）') if b!='NA' else text
+            source=self.controls['line_source'].currentData()
+            chain=source_text(self.controls['converter_input_source'].currentData())+(' → FrequencyConverter' if en else ' → 频率转换器') if source=='FrequencyConverter' else source_text(source)
+            self.trigger_help.setText(chain+(' → LineStart.' if en else ' → 行触发。'))
         framing=self.controls['framing_source'].currentData();workflow=framing!='legacy';cycle=line and self.controls['frequency_strategy'].currentData()=='cycle'
         self.field_forms['framing_source'].setRowVisible(self.controls['framing_source'],False)
         margin=self.controls['horizontal_margin_percent'];blocked=margin.blockSignals(True)
@@ -1122,6 +1152,10 @@ class CameraPage(QWidget):
                     key=row['entry']['key'];choices=row['capability'].get('choices',[])
                     if key=='PixelFormat':self.apply_enum_choices('pixel_format',['',*choices])
                     elif key=='EncoderSourceA':self.apply_enum_choices('encoder_line',choices)
+                    elif key in ('EncoderSourceB','EncoderOutputMode','EncoderCounterMode','InputSource','SignalAlignment'):
+                        field={'EncoderSourceB':'encoder_source_b','EncoderOutputMode':'encoder_output_mode','EncoderCounterMode':'encoder_counter_mode',
+                               'InputSource':'converter_input_source','SignalAlignment':'converter_alignment'}[key]
+                        self.apply_enum_choices(field,choices)
                     elif key=='TriggerSource' and row['entry']['selectors'].get('TriggerSelector')=='LineStart':self.apply_enum_choices('line_source',choices)
                     elif key=='TriggerSource' and row['entry']['selectors'].get('TriggerSelector')==data['plan']['settings']['frame_selector']:
                         self.apply_enum_choices('frame_line',[v for v in choices if v.startswith('Line') and v[4:].isdigit()])

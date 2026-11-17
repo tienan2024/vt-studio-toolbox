@@ -211,6 +211,10 @@ def read_trigger_ios(camera,line):
             except CameraError:pass
             try:result['encoder_line']=camera.read('EncoderSourceA','enum')['choices']
             except CameraError:pass
+            for field,key in (('encoder_source_b','EncoderSourceB'),('encoder_output_mode','EncoderOutputMode'),
+                              ('encoder_counter_mode','EncoderCounterMode'),('converter_input_source','InputSource'),('converter_alignment','SignalAlignment')):
+                try:result[field]=camera.read(key,'enum')['choices']
+                except CameraError:pass
     return result
 
 

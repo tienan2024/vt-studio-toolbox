@@ -45,33 +45,32 @@ public sealed class SolScriptHost : MarshalByRefObject
     static string Package(Dictionary<string,object> request) {
         string library=Path.Combine(apps,@"3rdLib\NPOI\ICSharpCode.SharpZipLib.dll");
         Assembly zip=Assembly.LoadFrom(library);
-        Type inputType=zip.GetType("ICSharpCode.SharpZipLib.Zip.ZipInputStream",true);
-        Type outputType=zip.GetType("ICSharpCode.SharpZipLib.Zip.ZipOutputStream",true);
-        Type entryType=zip.GetType("ICSharpCode.SharpZipLib.Zip.ZipEntry",true);
-        using(var input=File.OpenRead((string)request["input"]))
-        using(var output=File.Create((string)request["output"]))
-        using(var reader=(Stream)Activator.CreateInstance(inputType,new object[]{input}))
-        using(var writer=(Stream)Activator.CreateInstance(outputType,new object[]{output})) {
+        Type zipType=zip.GetType("ICSharpCode.SharpZipLib.Zip.ZipFile",true);
+        Type sourceType=zip.GetType("ICSharpCode.SharpZipLib.Zip.StaticDiskDataSource",true);
+        Type zip64Type=zip.GetType("ICSharpCode.SharpZipLib.Zip.UseZip64",true);
+        // Obtain the target frame's new compressed/encrypted record using the
+        // vendor updater. It still normalizes some untouched entry metadata;
+        // Python restores every non-target raw record before final delivery.
+        // Never promote the new target record to ZIP64 unnecessarily.
+        File.Copy((string)request["input"],(string)request["output"],false);
+        object archive=Activator.CreateInstance(zipType,new object[]{(string)request["output"]});
+        try {
             string password=(string)request["password"];
-            if(password.Length>0) {
-                inputType.GetProperty("Password").SetValue(reader,password,null);
-                outputType.GetProperty("Password").SetValue(writer,password,null);
+            if(password.Length>0)zipType.GetProperty("Password").SetValue(archive,password,null);
+            zipType.GetProperty("UseZip64").SetValue(archive,Enum.Parse(zip64Type,"Off"),null);
+            object entry=((IEnumerable)archive).Cast<object>().SingleOrDefault(
+                e=>((string)Get(e,"Name")).Replace('\\','/')=="SolutionFile/MoudleFrame");
+            if(entry==null)throw new Exception("Module frame entry missing.");
+            Call(archive,"BeginUpdate");
+            try {
+                object source=Activator.CreateInstance(sourceType,new object[]{(string)request["frame"]});
+                Call(archive,"Add",source,(string)Get(entry,"Name"),Get(entry,"CompressionMethod"),(bool)Get(entry,"IsUnicodeText"));
+                Call(archive,"CommitUpdate");
+            } catch {
+                try{Call(archive,"AbortUpdate");}catch{}
+                throw;
             }
-            object entry;bool replaced=false;
-            while((entry=Call(reader,"GetNextEntry"))!=null) {
-                string name=(string)Get(entry,"Name");
-                object replacement=Activator.CreateInstance(entryType,new object[]{name});
-                entryType.GetProperty("DateTime").SetValue(replacement,Get(entry,"DateTime"),null);
-                Call(writer,"PutNextEntry",replacement);
-                if(name.Replace('\\','/')=="SolutionFile/MoudleFrame") {
-                    using(var frame=File.OpenRead((string)request["frame"]))frame.CopyTo(writer);
-                    replaced=true;
-                } else reader.CopyTo(writer);
-                Call(writer,"CloseEntry");
-            }
-            if(!replaced)throw new Exception("Module frame entry missing.");
-            Call(writer,"Finish");
-        }
+        } finally {((IDisposable)archive).Dispose();}
         return Json.Serialize(new{ok=true,packaged=true});
     }
     static void Setup(string directory) {
@@ -98,7 +97,17 @@ public sealed class SolScriptHost : MarshalByRefObject
                 string name=(string)port["name"],kind=(string)port["type"];object io;
                 if(existing.TryGetValue(name,out io)) {
                     if((string)Get(io,"TypeName")!=kind) throw new Exception("Port type conflict: "+name);
-                } else if(add) Call(container,"AddIO",name,kind,-1);
+                } else if(add) {
+                    // VM stores custom port identifiers with both percent markers.
+                    // A bare AddIO name stays bare in VmIO.Name and is consequently
+                    // absent from native AddInputParam/AddOutputParam registration.
+                    Call(container,"AddIO","%"+name+"%",kind,-1);
+                    object added=((IEnumerable)Get(module,side=="Input"?"Inputs":"Outputs")).Cast<object>()
+                        .SingleOrDefault(p=>(string)Get(p,"Name")=="%"+name+"%");
+                    if(added==null || (string)Get(added,"TypeName")!=kind)
+                        throw new Exception("Native port creation failed: "+name);
+                    existing[name]=added;
+                }
                 else throw new Exception("Port missing after reload: "+name);
             }
         }

@@ -63,7 +63,7 @@ class ScriptJob(QThread):
 
 class ScriptPage(QWidget):
     def __init__(self):
-        super().__init__();self.worker=None;self.previous=None;self.sources={};self.config=None;self._loading=False;self.ports={};self.variable_notes={}
+        super().__init__();self.worker=None;self.previous=None;self.sources={};self.config=None;self._loading=False;self.ports={};self.variable_notes={};self._apply_password=None
         root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(10)
         split=QSplitter(Qt.Orientation.Horizontal);root.addWidget(split,1)
         self.config_panel=QWidget();left=QVBoxLayout(self.config_panel);left.setContentsMargins(4,0,12,4);left.setSpacing(10)
@@ -249,9 +249,8 @@ class ScriptPage(QWidget):
         if not module:raise ScriptError('请先选择脚本模块。')
         inputs={r['name']:r for r in module['inputs']};outputs={r['name']:r for r in module['outputs']}
         for name,kind in FIXED_INPUTS:
-            if name in ('aiResult','Label_name') and name not in inputs:continue
-            if name not in inputs or inputs[name]['type']!=kind:raise ScriptError('此模块无法直接套用 NG 模板：缺少标准输入 '+name+' 或类型不同。可继续查看原始清单。')
-        if set(outputs)!=set(dict(OUTPUTS)) or any(outputs[n]['type']!=t for n,t in OUTPUTS):raise ScriptError('此模块输出不符合 NG 模板的四项标准输出；原始变量仍可查看。')
+            if name in inputs and inputs[name]['type']!=kind:raise ScriptError('此模块无法直接套用 NG 模板：标准输入 '+name+' 类型不同。可继续查看原始清单。')
+        if set(outputs)-set(dict(OUTPUTS)) or any(n in outputs and outputs[n]['type']!=t for n,t in OUTPUTS):raise ScriptError('此模块输出不符合 NG 模板的四项标准输出；原始变量仍可查看。')
         signals=[r for r in module['inputs'] if r['name'] not in dict(FIXED_INPUTS)]
         if any(r['type']!='int' or not r['name'].endswith('Result') or r.get('array') for r in signals):raise ScriptError('存在 NG 模板不支持的输入；请使用原始清单参考，不自动推断其逻辑。')
         return signals
@@ -285,7 +284,7 @@ class ScriptPage(QWidget):
         if missing:c['use_ai']=False
         c.pop('ports',None);c.pop('variable_notes',None);self.load_config(c)
         self.variables.source.setCurrentIndex(0)
-        self.notify('已应用 '+module['flow']+' / '+module['name']+' 的变量，使用当前 NG 模板生成逻辑。'+('已补齐 aiResult、Label_name 兼容输入并关闭 AI 判定。' if missing else '请确认本产品 AI 规则。'))
+        self.notify('已应用 '+module['flow']+' / '+module['name']+' 的变量，使用当前 NG 模板生成逻辑。缺失的固定输入和标准输出会在应用时补齐，上游仍需配置。'+('AI 输入不完整，已关闭 AI 判定。' if missing else '请确认本产品 AI 规则。'))
 
     def review_sol_application(self,module):
         if self.is_busy():return
@@ -298,16 +297,20 @@ class ScriptPage(QWidget):
             c=config_for_module(c,module)
             if self.use_ai.isChecked()!=c['use_ai']:
                 self.use_ai.setChecked(c['use_ai']);self.refresh()
-            dialog=SolApplyDialog(self.variables.metadata['path'],module,c,self)
-            if not dialog.exec():return
-            request={'path':self.variables.metadata['path'],'module_id':module['id'],'config':c,
-                     'output':dialog.output.text(),'password':dialog.password.text(),
-                     'applications':dialog.sdk.text(),'previous':self.previous}
-            dialog.password.clear();self.start_sol_application(request)
+            path=self.variables.metadata['path']
+            dialog=SolApplyDialog(path,module,c,self,password=self.variables.session_password(path))
+            try:
+                if not dialog.exec():return
+                request={'path':path,'module_id':module['id'],'config':c,
+                         'output':dialog.output.text(),'password':dialog.password.text(),
+                         'applications':dialog.sdk.text(),'previous':self.previous}
+            finally:dialog.password.clear();dialog.deleteLater()
+            self.start_sol_application(request)
         except Exception as exc:self.notify(str(exc),True)
 
     def start_sol_application(self,request):
         if self.is_busy():return
+        self._apply_password=request.get('password')
         self.worker=SolApplyJob(request,self);self.worker.result.connect(self.test_finished)
         self.worker.failed.connect(self.test_failed);self.worker.finished.connect(self.job_stopped)
         self.worker.progress.connect(self.notify)
@@ -431,6 +434,7 @@ class ScriptPage(QWidget):
         self.progress.setRange(0,0);self.progress.show();self.test_status.setText('正在编译并执行 C#…');self.notify('正在编译生成的源码并运行离线用例…');self.worker.start()
 
     def test_failed(self,text):
+        self._apply_password=None
         self.notify(text,True)
         if getattr(self.worker,'action','')!='apply':self.test_status.setText('测试未完成：'+text)
 
@@ -438,10 +442,12 @@ class ScriptPage(QWidget):
         if action=='apply':
             if data.get('metadata'):
                 self.variables.set_metadata(data['metadata'])
+                self.variables.remember_password(data['metadata']['path'],self._apply_password)
                 target=next(m for m in data['metadata']['scripts'] if m['id']==str(data['module_id']))
                 self.variables.flow.setCurrentIndex(self.variables.flow.findData(target['flow_id']))
                 self.variables.module.setCurrentIndex(self.variables.module.findData(target['id']))
             self.variables.status.setText('已保存并继续编辑：'+data['output'])
+            self._apply_password=None
             self.notify('已继续使用新方案：'+data['output']+'。可切换流程修改下一脚本，之前已应用的修改会保留。检测流程未运行。')
             return
         if action=='frame':
@@ -457,6 +463,7 @@ class ScriptPage(QWidget):
         self.test_scroll.ensureWidgetVisible(self.result_tabs)
 
     def job_stopped(self):
+        self._apply_password=None
         self.config_panel.setEnabled(True);self.test_inputs.setEnabled(True);self.run_button.setEnabled(True);self.regression_button.setEnabled(True);self.progress.hide()
         self.save_cs_button.setEnabled(True)
         self.variables.setEnabled(True)

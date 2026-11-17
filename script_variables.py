@@ -34,6 +34,7 @@ class VariablesPanel(QWidget):
     def __init__(self,factory,parent=None,external_sol=False):
         super().__init__(parent);self.job=None;self.metadata=None;self.rows=[];self.template_rows=[];self._loading=False
         self.pending_password=False;self.last_error='';self.path=''
+        self._session_password=None;self._session_path='';self._read_password=None
         self.external_sol=external_sol
         layout=QVBoxLayout(self);layout.setContentsMargins(12,12,12,12);layout.setSpacing(12)
         actions=QHBoxLayout();self.source=QComboBox();self.source.addItem('当前生成脚本');actions.addWidget(self.source,1)
@@ -122,6 +123,7 @@ class VariablesPanel(QWidget):
         self.module.blockSignals(False);self.show_source()
 
     def set_metadata(self,data):
+        if self._password_path(data['path'])!=self._session_path:self.clear_session_password()
         self.path=data['path']
         self.path_display.setText(data['path']);self.path_display.setToolTip(data['path'])
         self.metadata=data;self.flow.blockSignals(True);self.flow.clear();seen=set()
@@ -142,18 +144,39 @@ class VariablesPanel(QWidget):
 
     def start_read(self,path,password=None):
         if self.is_busy():return
+        if self._password_path(path)!=self._session_path:self.clear_session_password()
+        if password is None:password=self.session_password(path)
+        self._read_password=password
         self.path=path;self.pending_password=False;self.last_error='';self.job=SolJob(path,password,self)
-        self.job.result.connect(self.set_metadata);self.job.failed.connect(self.read_failed);self.job.finished.connect(self.read_stopped)
+        self.job.result.connect(self.read_succeeded);self.job.failed.connect(self.read_failed);self.job.finished.connect(self.read_stopped)
         self.set_controls(False);self.status.setText('正在只读提取 SOL 元数据…');self.job.start()
 
+    @staticmethod
+    def _password_path(path):return str(Path(path).absolute()).casefold() if path else ''
+
+    def session_password(self,path=None):
+        return self._session_password if self._password_path(path or (self.metadata or {}).get('path',''))==self._session_path else None
+
+    def remember_password(self,path,password):
+        self._session_path=self._password_path(path);self._session_password=password or None
+
+    def clear_session_password(self):
+        self._session_password=None;self._session_path='';self._read_password=None
+
+    def read_succeeded(self,data):
+        password=self._read_password;self._read_password=None
+        self.set_metadata(data);self.remember_password(data['path'],password)
+
     def read_failed(self,text,needs_password):
+        self._read_password=None
+        if needs_password:self.clear_session_password()
         self.last_error=text;self.pending_password=needs_password;self.status.setText(text)
 
     def read_stopped(self):
         job=self.job;self.job=None;job.deleteLater();self.set_controls(True)
         if self.pending_password:
             self.pending_password=False
-            password,ok=QInputDialog.getText(self,'SOL 方案密码','仅用于本次只读提取，不保存密码：',QLineEdit.EchoMode.Password)
+            password,ok=QInputDialog.getText(self,'SOL 方案密码','当前方案会话内复用；关闭软件或打开其他方案后清除：',QLineEdit.EchoMode.Password)
             if ok and password:self.start_read(self.path,password)
             else:self.status.setText('已取消密码输入；当前清单保持不变。')
 

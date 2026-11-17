@@ -24,7 +24,7 @@ class SolApplyJob(QThread):
 
 
 class SolApplyDialog(QDialog):
-    def __init__(self,path,module,config,parent=None):
+    def __init__(self,path,module,config,parent=None,password=None):
         super().__init__(parent);self.setWindowTitle('应用脚本到 SOL');self.resize(720,490)
         self.plan=plan_application(config,module);self.path=Path(path)
         root=QVBoxLayout(self);root.setSpacing(12)
@@ -40,13 +40,15 @@ class SolApplyDialog(QDialog):
         self.output=QLineEdit(str(output));out_row=QHBoxLayout();out_row.addWidget(self.output,1)
         choose=QPushButton('另存位置');choose.clicked.connect(self.browse_output);out_row.addWidget(choose);form.addRow('新方案',out_row)
         self.password=QLineEdit();self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password.setPlaceholderText('受保护方案填写密码，仅用于本次应用');form.addRow('方案密码',self.password);root.addLayout(form)
+        self.password.setText(password or '')
+        self.password.setPlaceholderText('当前方案会话内复用；关闭或切换方案后清除');form.addRow('方案密码',self.password);root.addLayout(form)
         summary=QPlainTextEdit();summary.setReadOnly(True)
         lines=['沿用已有变量与原绑定：'+str(len(self.plan['preserved']))+' 项']
         lines+=['AI 判定：'+('启用' if self.plan['ai_enabled'] else '关闭（兼容AI输入不参与判定）')]
         lines+=['  '+r['direction']+'  '+r['name']+' ('+r['type']+')' for r in self.plan['preserved']]
         lines+=['新增变量：'+str(len(self.plan['added']))+' 项（原变量不删除、不重命名）']
         lines+=['  '+r['direction']+'  '+r['name']+' ('+r['type']+')' for r in self.plan['added']]
+        if any(r['direction']=='输入' for r in self.plan['added']):lines+=['新增输入未绑定，上游来源请在 VM 中配置。']
         lines+=['不会运行检测流程。新方案保持原密码；替换所选模块的全部脚本源码。']
         summary.setPlainText('\n'.join(lines));root.addWidget(summary,1)
         self.error=QLabel();self.error.setWordWrap(True);self.error.setTextFormat(Qt.TextFormat.PlainText);root.addWidget(self.error)
